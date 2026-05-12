@@ -68,7 +68,7 @@ public class Profile {
     }
 
     public String getDns() {
-        return mPref.getString(key("dns"), "8.8.8.8");
+        return mPref.getString(key("dns"), "9.9.9.9");
     }
 
     public void setDns(String dns) {
@@ -76,7 +76,7 @@ public class Profile {
     }
 
     public int getDnsPort() {
-        return mPref.getInt(key("dns_port"), 53);
+        return mPref.getInt(key("dns_port"), 9953);
     }
 
     public void setDnsPort(int port) {
@@ -148,7 +148,7 @@ public class Profile {
     }
 
     public String getDownLimit() {
-        return mPref.getString(key("down_limit"), "1 Mbps");
+        return mPref.getString(key("down_limit"), "2 Mbps");
     }
 
     public void setDownLimit(String limit) {
@@ -156,7 +156,7 @@ public class Profile {
     }
 
     public int getRecvWinConn() {
-        return mPref.getInt(key("recv_win_conn"), 262144);
+        return mPref.getInt(key("recv_win_conn"), 1048576);
     }
 
     public void setRecvWinConn(int win) {
@@ -164,7 +164,7 @@ public class Profile {
     }
 
     public int getRecvWin() {
-        return mPref.getInt(key("recv_win"), 4194304);
+        return mPref.getInt(key("recv_win"), 3145728);
     }
 
     public void setRecvWin(int win) {

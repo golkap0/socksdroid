@@ -163,7 +163,7 @@ public class SocksVpnService extends VpnService {
         b.setMtu(1500)
                 .setSession(name)
                 .addAddress("26.26.26.1", 24)
-                .addDnsServer("8.8.8.8");
+                .addDnsServer("26.26.26.1");
 
         if (ipv6) {
             // Route all IPv6 traffic
@@ -173,10 +173,9 @@ public class SocksVpnService extends VpnService {
 
         Routes.addRoutes(this, b, route);
 
-        // Add the default DNS
-        // Note that this DNS is just a stub.
+        // Add the DNS stub inside the VPN network.
         // Actual DNS requests will be redirected through pdnsd.
-        b.addRoute("8.8.8.8", 32);
+        b.addRoute("26.26.26.1", 32);
 
         // Do app routing
         if (!perApp) {

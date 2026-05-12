@@ -2,7 +2,10 @@ package net.typeblog.socks;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
@@ -427,7 +430,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                     String input = e.getText().toString().trim();
                     if (TextUtils.isEmpty(input)) return;
 
-                    String[] lines = input.split("\\n");
+                    String[] lines = input.split("\n");
                     for (String line : lines) {
                         line = line.trim();
                         if (line.startsWith("zivpn://")) {
@@ -440,14 +443,27 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                                 if (p != null) {
                                     p.setTunnelHost(server);
                                     p.setTunnelUser(auth);
-                                    p.setServer("127.0.0.1"); // Load balancer address
-                                    p.setPort(7777); // Load balancer port
+                                    p.setServer("127.0.0.1");
+                                    p.setPort(7777);
                                     mProfile = p;
                                 }
                             }
                         }
                     }
                     reload();
+                })
+                .setNeutralButton("Paste", (d, which) -> {
+                    ClipboardManager clipboard = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null && clipboard.hasPrimaryClip()) {
+                        ClipData clip = clipboard.getPrimaryClip();
+                        if (clip != null && clip.getItemCount() > 0) {
+                            CharSequence text = clip.getItemAt(0).coerceToText(getActivity());
+                            if (text != null) {
+                                e.setText(text.toString());
+                                e.setSelection(e.getText().length());
+                            }
+                        }
+                    }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .create().show();
@@ -457,12 +473,19 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         String export = String.format("zivpn://%s@%s", mProfile.getTunnelHost(), mProfile.getTunnelUser());
         final EditText e = new EditText(getActivity());
         e.setText(export);
-        e.setKeyListener(null); // Make it read-only but selectable
+        e.setKeyListener(null);
 
         new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.prof_export)
                 .setView(e)
-                .setPositiveButton(android.R.string.ok, null)
+                .setPositiveButton("Copy", (d, which) -> {
+                    ClipboardManager clipboard = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("zivpn_profile", export));
+                        Toast.makeText(getActivity(), "Profile copied to clipboard", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
                 .create().show();
     }
 
