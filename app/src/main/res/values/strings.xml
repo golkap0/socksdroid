@@ -15,7 +15,9 @@
     <string name="udp_proxy_sum">Forward UDP packets to badvpn-udpgw via SOCKS5. This needs badvpn-udpgw running on the remote server (normally listening on 127.0.0.1) to work.</string>
     <string name="udp_gw">UDP Gateway (Remote)</string>
 
-    <string name="performance">Multi-Tunnel Performance</string>
+    <string name="performance">UDP Tunnel Settings</string>
+    <string name="tunnel_host">Tunnel Host</string>
+    <string name="tunnel_user">Tunnel Username</string>
     <string name="obfs_key">OBFS Key</string>
     <string name="up_limit">Upload Limit (0 to disable)</string>
     <string name="down_limit">Download Limit (0 to disable)</string>

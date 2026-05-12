@@ -24,7 +24,9 @@ public class Constants
             INTENT_DOWN_LIMIT = INTENT_PREFIX + "DOWN",
             INTENT_RECV_WIN_CONN = INTENT_PREFIX + "RECVWINCONN",
             INTENT_RECV_WIN = INTENT_PREFIX + "RECVWIN",
-            INTENT_CORE_COUNT = INTENT_PREFIX + "CORECOUNT";
+            INTENT_CORE_COUNT = INTENT_PREFIX + "CORECOUNT",
+            INTENT_TUNNEL_HOST = INTENT_PREFIX + "TUNHOST",
+            INTENT_TUNNEL_USER = INTENT_PREFIX + "TUNUSER";
 
     public static final String PREF = "profile",
             PREF_PROFILE = "profile",
@@ -40,6 +42,8 @@ public class Constants
             PREF_RECV_WIN_CONN = "recv_win_conn",
             PREF_RECV_WIN = "recv_win",
             PREF_CORE_COUNT = "core_count",
+            PREF_TUNNEL_HOST = "tunnel_host",
+            PREF_TUNNEL_USER = "tunnel_user",
             PREF_AUTH_USERPW = "auth_userpw",
             PREF_AUTH_USERNAME = "auth_username",
             PREF_AUTH_PASSWORD = "auth_password",

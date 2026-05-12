@@ -179,6 +179,22 @@ public class Profile {
         mPref.edit().putInt(key("core_count"), count).apply();
     }
 
+    public String getTunnelHost() {
+        return mPref.getString(key("tunnel_host"), "ssh-2.chice.me");
+    }
+
+    public void setTunnelHost(String host) {
+        mPref.edit().putString(key("tunnel_host"), host).apply();
+    }
+
+    public String getTunnelUser() {
+        return mPref.getString(key("tunnel_user"), "vpnstunnel-bnml0");
+    }
+
+    public void setTunnelUser(String user) {
+        mPref.edit().putString(key("tunnel_user"), user).apply();
+    }
+
     public boolean autoConnect() {
         return mPref.getBoolean(key("auto"), false);
     }
@@ -209,6 +225,8 @@ public class Profile {
                 .remove(key("recv_win_conn"))
                 .remove(key("recv_win"))
                 .remove(key("core_count"))
+                .remove(key("tunnel_host"))
+                .remove(key("tunnel_user"))
                 .remove(key("auto"))
                 .apply();
     }

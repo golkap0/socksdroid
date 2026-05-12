@@ -74,6 +74,8 @@ public class SocksVpnService extends VpnService {
         final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 262144);
         final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 4194304);
         final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 4);
+        final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST);
+        final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER);
 
         // Notifications on Oreo and above need a channel
         Notification.Builder builder;
@@ -113,7 +115,7 @@ public class SocksVpnService extends VpnService {
 
         if (mInterface != null)
             start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
-                    obfs, up, down, recvWinConn, recvWin, coreCount);
+                    obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
 
         return START_STICKY;
     }
@@ -222,7 +224,8 @@ public class SocksVpnService extends VpnService {
     }
 
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
-                       String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount) {
+                       String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
+                       String tunHost, String tunUser) {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, dns, dnsPort);
 
@@ -236,7 +239,7 @@ public class SocksVpnService extends VpnService {
             int listenPort = 1080 + i;
             String jsonConfig = String.format(Locale.US,
                     "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
-                    server, serverPorts, obfs, user, listenPort);
+                    tunHost, serverPorts, obfs, tunUser, listenPort);
 
             if (!"0".equals(up)) {
                 jsonConfig += String.format(Locale.US, ",\"up\":\"%s\"", up);

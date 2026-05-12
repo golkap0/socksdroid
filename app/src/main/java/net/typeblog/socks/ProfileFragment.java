@@ -72,6 +72,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private ListPreference mPrefProfile, mPrefRoutes;
     private EditTextPreference mPrefServer, mPrefPort, mPrefUsername, mPrefPassword,
             mPrefDns, mPrefDnsPort, mPrefAppList, mPrefUDPGW,
+            mPrefTunnelHost, mPrefTunnelUser,
             mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefCoreCount;
     private CheckBoxPreference mPrefUserpw, mPrefPerApp, mPrefAppBypass, mPrefIPv6, mPrefUDP, mPrefAuto;
 
@@ -187,6 +188,14 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             mProfile.setUDPGW(newValue.toString());
             resetTextN(mPrefUDPGW, newValue);
             return true;
+        } else if (p == mPrefTunnelHost) {
+            mProfile.setTunnelHost(newValue.toString());
+            resetTextN(mPrefTunnelHost, newValue);
+            return true;
+        } else if (p == mPrefTunnelUser) {
+            mProfile.setTunnelUser(newValue.toString());
+            resetTextN(mPrefTunnelUser, newValue);
+            return true;
         } else if (p == mPrefObfsKey) {
             mProfile.setObfsKey(newValue.toString());
             resetTextN(mPrefObfsKey, newValue);
@@ -263,6 +272,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefIPv6 = (CheckBoxPreference) findPreference(PREF_IPV6_PROXY);
         mPrefUDP = (CheckBoxPreference) findPreference(PREF_UDP_PROXY);
         mPrefUDPGW = (EditTextPreference) findPreference(PREF_UDP_GW);
+        mPrefTunnelHost = (EditTextPreference) findPreference(PREF_TUNNEL_HOST);
+        mPrefTunnelUser = (EditTextPreference) findPreference(PREF_TUNNEL_USER);
         mPrefObfsKey = (EditTextPreference) findPreference(PREF_OBFS_KEY);
         mPrefUpLimit = (EditTextPreference) findPreference(PREF_UP_LIMIT);
         mPrefDownLimit = (EditTextPreference) findPreference(PREF_DOWN_LIMIT);
@@ -286,6 +297,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefIPv6.setOnPreferenceChangeListener(this);
         mPrefUDP.setOnPreferenceChangeListener(this);
         mPrefUDPGW.setOnPreferenceChangeListener(this);
+        mPrefTunnelHost.setOnPreferenceChangeListener(this);
+        mPrefTunnelUser.setOnPreferenceChangeListener(this);
         mPrefObfsKey.setOnPreferenceChangeListener(this);
         mPrefUpLimit.setOnPreferenceChangeListener(this);
         mPrefDownLimit.setOnPreferenceChangeListener(this);
@@ -320,6 +333,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefDns.setText(mProfile.getDns());
         mPrefDnsPort.setText(String.valueOf(mProfile.getDnsPort()));
         mPrefUDPGW.setText(mProfile.getUDPGW());
+        mPrefTunnelHost.setText(mProfile.getTunnelHost());
+        mPrefTunnelUser.setText(mProfile.getTunnelUser());
         mPrefObfsKey.setText(mProfile.getObfsKey());
         mPrefUpLimit.setText(mProfile.getUpLimit());
         mPrefDownLimit.setText(mProfile.getDownLimit());
@@ -327,6 +342,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefRecvWin.setText(String.valueOf(mProfile.getRecvWin()));
         mPrefCoreCount.setText(String.valueOf(mProfile.getCoreCount()));
         resetText(mPrefServer, mPrefPort, mPrefUsername, mPrefPassword, mPrefDns, mPrefDnsPort, mPrefUDPGW,
+                mPrefTunnelHost, mPrefTunnelUser,
                 mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefCoreCount);
 
         mPrefAppList.setText(mProfile.getAppList());
@@ -422,10 +438,10 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                                 String auth = parts[1];
                                 Profile p = mManager.addProfile(server);
                                 if (p != null) {
-                                    p.setServer(server);
-                                    p.setIsUserpw(true);
-                                    p.setUsername(auth);
-                                    p.setPassword(auth); // Use auth for both as per requested format
+                                    p.setTunnelHost(server);
+                                    p.setTunnelUser(auth);
+                                    p.setServer("127.0.0.1"); // Load balancer address
+                                    p.setPort(7777); // Load balancer port
                                     mProfile = p;
                                 }
                             }
@@ -438,7 +454,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     private void exportProfile() {
-        String export = String.format("zivpn://%s@%s", mProfile.getServer(), mProfile.getUsername());
+        String export = String.format("zivpn://%s@%s", mProfile.getTunnelHost(), mProfile.getTunnelUser());
         final EditText e = new EditText(getActivity());
         e.setText(export);
         e.setKeyListener(null); // Make it read-only but selectable

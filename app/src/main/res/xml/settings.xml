@@ -41,6 +41,16 @@
         android:title="@string/performance">
 
         <EditTextPreference
+            android:key="tunnel_host"
+            android:title="@string/tunnel_host"
+            android:singleLine="true"/>
+
+        <EditTextPreference
+            android:key="tunnel_user"
+            android:title="@string/tunnel_user"
+            android:singleLine="true"/>
+
+        <EditTextPreference
             android:key="obfs_key"
             android:title="@string/obfs_key"
             android:singleLine="true"/>
