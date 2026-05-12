@@ -5,11 +5,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
 import android.util.Log;
+import android.content.pm.ApplicationInfo;
 
 import net.typeblog.socks.util.Profile;
 import net.typeblog.socks.util.ProfileManager;
 import net.typeblog.socks.util.Utility;
-import static net.typeblog.socks.BuildConfig.DEBUG;
 
 public class BootReceiver extends BroadcastReceiver {
     private static final String TAG = BootReceiver.class.getSimpleName();
@@ -21,7 +21,7 @@ public class BootReceiver extends BroadcastReceiver {
 
             if (p.autoConnect() && VpnService.prepare(context) == null) {
 
-                if (DEBUG) {
+                if ((context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
                     Log.d(TAG, "starting VPN service on boot");
                 }
 

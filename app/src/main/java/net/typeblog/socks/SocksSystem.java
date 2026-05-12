@@ -1,6 +1,6 @@
 package net.typeblog.socks;
 
-class System
+class SocksSystem
 {
     static {
         java.lang.System.loadLibrary("system");

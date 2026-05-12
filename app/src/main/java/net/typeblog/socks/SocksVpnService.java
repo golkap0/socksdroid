@@ -23,9 +23,9 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Locale;
 import java.util.Objects;
+import android.content.pm.ApplicationInfo;
 
 import static net.typeblog.socks.util.Constants.*;
-import static net.typeblog.socks.BuildConfig.DEBUG;
 
 public class SocksVpnService extends VpnService {
     class VpnBinder extends IVpnService.Stub {
@@ -42,6 +42,10 @@ public class SocksVpnService extends VpnService {
 
     private static final String TAG = SocksVpnService.class.getSimpleName();
 
+    private boolean isDebuggable() {
+        return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
     private ParcelFileDescriptor mInterface;
     private boolean mRunning = false;
     private final IBinder mBinder = new VpnBinder();
@@ -50,7 +54,7 @@ public class SocksVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
-        if (DEBUG) {
+        if (isDebuggable()) {
             Log.d(TAG, "starting");
         }
 
@@ -117,7 +121,7 @@ public class SocksVpnService extends VpnService {
         // Create an fd.
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
-        if (DEBUG)
+        if (isDebuggable())
             Log.d(TAG, "fd: " + mInterface.getFd());
 
         if (mInterface != null)
@@ -163,7 +167,7 @@ public class SocksVpnService extends VpnService {
         Utility.exec("pkill -9 -f libtun2socks.so");
 
         try {
-            System.jniclose(mInterface.getFd());
+            SocksSystem.jniclose(mInterface.getFd());
             mInterface.close();
         } catch (Exception e) {
             e.printStackTrace();
@@ -321,7 +325,7 @@ public class SocksVpnService extends VpnService {
             command += " --udpgw-remote-server-addr " + udpgw;
         }
 
-        if (DEBUG) {
+        if (isDebuggable()) {
             Log.d(TAG, command);
         }
 
@@ -333,7 +337,7 @@ public class SocksVpnService extends VpnService {
         // Try to send the Fd through socket.
         int i = 0;
         while (i < 5) {
-            if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
+            if (SocksSystem.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
                 mRunning = true;
                 return;
             }
