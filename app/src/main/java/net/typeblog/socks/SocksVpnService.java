@@ -45,7 +45,8 @@ public class SocksVpnService extends VpnService {
     private static final String TAG = SocksVpnService.class.getSimpleName();
 
     private ParcelFileDescriptor mInterface;
-    private boolean mRunning = false;
+    private volatile boolean mRunning = false;
+    private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
 
@@ -60,7 +61,7 @@ public class SocksVpnService extends VpnService {
             return START_STICKY;
         }
 
-        if (mRunning) {
+        if (mRunning || mStarting) {
             return START_STICKY;
         }
 
@@ -119,12 +120,21 @@ public class SocksVpnService extends VpnService {
         // Create an fd.
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
-        if (DEBUG)
-            Log.d(TAG, "fd: " + mInterface.getFd());
+        if (mInterface != null) {
+            if (DEBUG)
+                Log.d(TAG, "fd: " + mInterface.getFd());
 
-        if (mInterface != null)
-            start(mInterface.getFd(), server, port, username, passwd, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns, dnsPort, ipv6, udpgw,
-                    obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+            mStarting = true;
+            final int fd = mInterface.getFd();
+            new Thread(() -> {
+                try {
+                    start(fd, server, port, username, passwd, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns, dnsPort, ipv6, udpgw,
+                            obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+                } finally {
+                    mStarting = false;
+                }
+            }).start();
+        }
 
         return START_STICKY;
     }
@@ -164,13 +174,17 @@ public class SocksVpnService extends VpnService {
         Utility.exec("pkill -9 -f libpdnsd.so");
         Utility.exec("pkill -9 -f libtun2socks.so");
 
-        try {
-            System.jniclose(mInterface.getFd());
-            mInterface.close();
-        } catch (Exception e) {
-            e.printStackTrace();
+        if (mInterface != null) {
+            try {
+                System.jniclose(mInterface.getFd());
+                mInterface.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            mInterface = null;
         }
 
+        mRunning = false;
         stopSelf();
     }
 
@@ -390,8 +404,9 @@ public class SocksVpnService extends VpnService {
         }
 
         private void handleClient(Socket client) {
+            Socket proxy = null;
             try {
-                Socket proxy = new Socket("127.0.0.1", proxyPort);
+                proxy = new Socket("127.0.0.1", proxyPort);
                 InputStream in = proxy.getInputStream();
                 OutputStream out = proxy.getOutputStream();
 
@@ -424,10 +439,12 @@ public class SocksVpnService extends VpnService {
                 }
 
                 // Forwarding
-                executor.execute(() -> pipe(client, proxy));
-                executor.execute(() -> pipe(proxy, client));
+                final Socket finalProxy = proxy;
+                executor.execute(() -> pipe(client, finalProxy));
+                executor.execute(() -> pipe(finalProxy, client));
             } catch (IOException e) {
                 try { client.close(); } catch (IOException ignored) {}
+                try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
             }
         }
 

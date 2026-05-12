@@ -247,6 +247,31 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        if (mSwitch != null) {
+            mSwitch.postDelayed(mStateRunnable, 1000);
+        }
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        if (mSwitch != null) {
+            mSwitch.removeCallbacks(mStateRunnable);
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mBinder != null) {
+            getActivity().unbindService(mConnection);
+            mBinder = null;
+        }
+    }
+
+    @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
