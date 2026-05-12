@@ -21,8 +21,11 @@ public class Utility {
     public static int exec(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-
-            return p.waitFor();
+            int ret = p.waitFor();
+            p.getInputStream().close();
+            p.getOutputStream().close();
+            p.getErrorStream().close();
+            return ret;
         } catch (Exception e) {
             return -1;
         }
@@ -31,8 +34,11 @@ public class Utility {
     public static int exec(String[] cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-
-            return p.waitFor();
+            int ret = p.waitFor();
+            p.getInputStream().close();
+            p.getOutputStream().close();
+            p.getErrorStream().close();
+            return ret;
         } catch (Exception e) {
             return -1;
         }
@@ -45,22 +51,15 @@ public class Utility {
             return;
         }
 
-        InputStream i;
-        try {
-            i = new FileInputStream(file);
-        } catch (Exception e) {
-            return;
-        }
-
-        byte[] buf = new byte[512];
-        int len;
         StringBuilder str = new StringBuilder();
 
-        try {
+        try (InputStream i = new FileInputStream(file)) {
+            byte[] buf = new byte[512];
+            int len;
+
             while ((len = i.read(buf, 0, 512)) > 0) {
                 str.append(new String(buf, 0, len));
             }
-            i.close();
         } catch (Exception e) {
             return;
         }

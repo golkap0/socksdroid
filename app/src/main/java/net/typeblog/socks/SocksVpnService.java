@@ -409,6 +409,10 @@ public class SocksVpnService extends VpnService {
 
         public void stopForwarder() {
             interrupt();
+            try {
+                if (serverSocket != null) serverSocket.close();
+            } catch (IOException ignored) {}
+
             executor.shutdownNow();
             try {
                 if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
@@ -417,13 +421,11 @@ public class SocksVpnService extends VpnService {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
-            try {
-                if (serverSocket != null) serverSocket.close();
-            } catch (IOException ignored) {}
         }
 
         private void handleClient(Socket client) {
             Socket proxy = null;
+            boolean handoffSuccessful = false;
             try {
                 proxy = new Socket("127.0.0.1", proxyPort);
                 proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
@@ -434,8 +436,6 @@ public class SocksVpnService extends VpnService {
                 out.write(new byte[]{0x05, 0x01, 0x00});
                 byte[] handshakeResp = new byte[2];
                 if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) {
-                    proxy.close();
-                    client.close();
                     return;
                 }
 
@@ -453,8 +453,6 @@ public class SocksVpnService extends VpnService {
 
                 byte[] replyHeader = new byte[4];
                 if (!readFully(in, replyHeader) || replyHeader[1] != 0x00) {
-                    proxy.close();
-                    client.close();
                     return;
                 }
                 int atyp = replyHeader[3] & 0xFF;
@@ -466,33 +464,30 @@ public class SocksVpnService extends VpnService {
                 } else if (atyp == 0x03) { // DOMAIN
                     int domainLen = in.read();
                     if (domainLen == -1) {
-                        proxy.close();
-                        client.close();
                         return;
                     }
                     addrLen = domainLen;
                 } else {
-                    proxy.close();
-                    client.close();
                     return;
                 }
                 byte[] replyBody = new byte[addrLen + 2];
                 if (!readFully(in, replyBody)) {
-                    proxy.close();
-                    client.close();
                     return;
                 }
 
                 // Forwarding
-                final Socket finalProxy = proxy;
-                executor.execute(() -> pipe(client, finalProxy));
-                executor.execute(() -> pipe(finalProxy, client));
-            } catch (SocketTimeoutException e) {
-                try { client.close(); } catch (IOException ignored) {}
-                try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
+                final Socket fClient = client;
+                final Socket fProxy = proxy;
+                handoffSuccessful = true;
+                executor.execute(() -> pipe(fClient, fProxy));
+                executor.execute(() -> pipe(fProxy, fClient));
             } catch (IOException e) {
-                try { client.close(); } catch (IOException ignored) {}
-                try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
+                // Ignore
+            } finally {
+                if (!handoffSuccessful) {
+                    try { client.close(); } catch (IOException ignored) {}
+                    if (proxy != null) try { proxy.close(); } catch (IOException ignored) {}
+                }
             }
         }
 

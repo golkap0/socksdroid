@@ -30,6 +30,7 @@ import net.typeblog.socks.util.Profile;
 import net.typeblog.socks.util.ProfileManager;
 import net.typeblog.socks.util.Utility;
 
+import java.lang.ref.WeakReference;
 import java.util.Locale;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -46,38 +47,63 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private boolean mBound = false;
     private long mLastBindAttemptMs = 0L;
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
-    private final ServiceConnection mConnection = new ServiceConnection() {
+    private final ServiceConnection mConnection = new VpnServiceConnection(this);
+    private final Runnable mStateRunnable = new StateRunnable(this);
+
+    private static class VpnServiceConnection implements ServiceConnection {
+        private final WeakReference<ProfileFragment> mFragment;
+
+        VpnServiceConnection(ProfileFragment fragment) {
+            mFragment = new WeakReference<>(fragment);
+        }
+
         @Override
         public void onServiceConnected(ComponentName p1, IBinder binder) {
-            mBinding = false;
-            mBound = true;
-            mBinder = IVpnService.Stub.asInterface(binder);
+            ProfileFragment fragment = mFragment.get();
+            if (fragment == null) return;
+
+            fragment.mBinding = false;
+            fragment.mBound = true;
+            fragment.mBinder = IVpnService.Stub.asInterface(binder);
 
             try {
-                mRunning = mBinder.isRunning();
+                fragment.mRunning = fragment.mBinder.isRunning();
             } catch (Exception e) {
                 e.printStackTrace();
             }
 
-            if (mRunning) {
-                updateState();
+            if (fragment.mRunning) {
+                fragment.updateState();
             }
         }
 
         @Override
         public void onServiceDisconnected(ComponentName p1) {
-            mBound = false;
-            mBinding = false;
-            mBinder = null;
+            ProfileFragment fragment = mFragment.get();
+            if (fragment == null) return;
+
+            fragment.mBound = false;
+            fragment.mBinding = false;
+            fragment.mBinder = null;
         }
-    };
-    private final Runnable mStateRunnable = new Runnable() {
+    }
+
+    private static class StateRunnable implements Runnable {
+        private final WeakReference<ProfileFragment> mFragment;
+
+        StateRunnable(ProfileFragment fragment) {
+            mFragment = new WeakReference<>(fragment);
+        }
+
         @Override
         public void run() {
-            updateState();
-            mSwitch.postDelayed(this, 1000);
+            ProfileFragment fragment = mFragment.get();
+            if (fragment == null || fragment.mSwitch == null) return;
+
+            fragment.updateState();
+            fragment.mSwitch.postDelayed(this, 1000);
         }
-    };
+    }
     private IVpnService mBinder;
 
     private ListPreference mPrefProfile, mPrefRoutes;
@@ -271,6 +297,36 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         if (mSwitch != null) {
             mSwitch.removeCallbacks(mStateRunnable);
         }
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        mSwitch = null;
+        mPrefProfile = null;
+        mPrefRoutes = null;
+        mPrefServer = null;
+        mPrefPort = null;
+        mPrefUsername = null;
+        mPrefPassword = null;
+        mPrefDns = null;
+        mPrefDnsPort = null;
+        mPrefAppList = null;
+        mPrefUDPGW = null;
+        mPrefTunnelHost = null;
+        mPrefTunnelUser = null;
+        mPrefObfsKey = null;
+        mPrefUpLimit = null;
+        mPrefDownLimit = null;
+        mPrefRecvWinConn = null;
+        mPrefRecvWin = null;
+        mPrefCoreCount = null;
+        mPrefUserpw = null;
+        mPrefPerApp = null;
+        mPrefAppBypass = null;
+        mPrefIPv6 = null;
+        mPrefUDP = null;
+        mPrefAuto = null;
     }
 
     @Override
