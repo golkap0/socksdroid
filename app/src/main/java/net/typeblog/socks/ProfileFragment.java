@@ -2,7 +2,10 @@ package net.typeblog.socks;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
@@ -420,6 +423,20 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         final EditText e = new EditText(getActivity());
         e.setHint("zivpn://server@udpauth");
 
+        ClipboardManager clipboard = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard.hasPrimaryClip() && clipboard.getPrimaryClipDescription().hasMimeType("text/plain")) {
+            ClipData clip = clipboard.getPrimaryClip();
+            if (clip != null && clip.getItemCount() > 0) {
+                ClipData.Item item = clip.getItemAt(0);
+                if (item != null && item.getText() != null) {
+                    String text = item.getText().toString();
+                    if (text.startsWith("zivpn://")) {
+                        e.setText(text);
+                    }
+                }
+            }
+        }
+
         new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.prof_import)
                 .setView(e)
@@ -458,6 +475,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         final EditText e = new EditText(getActivity());
         e.setText(export);
         e.setKeyListener(null); // Make it read-only but selectable
+
+        ClipboardManager clipboard = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = ClipData.newPlainText("ZIVPN Profile", export);
+        clipboard.setPrimaryClip(clip);
+
+        Toast.makeText(getActivity(), R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show();
 
         new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.prof_export)
