@@ -373,7 +373,7 @@ public class SocksVpnService extends VpnService {
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
-        private final ExecutorService executor = Executors.newFixedThreadPool(16);
+        private final ExecutorService executor = Executors.newCachedThreadPool();
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;

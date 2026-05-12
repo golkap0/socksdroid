@@ -2,7 +2,10 @@ package net.typeblog.socks;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
@@ -445,6 +448,21 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         final EditText e = new EditText(getActivity());
         e.setHint("zivpn://server@udpauth");
 
+        ClipboardManager clipboard = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard.hasPrimaryClip() && clipboard.getPrimaryClipDescription().hasMimeType("text/plain")) {
+            ClipData clipData = clipboard.getPrimaryClip();
+            if (clipData != null && clipData.getItemCount() > 0) {
+                ClipData.Item item = clipData.getItemAt(0);
+                CharSequence text = item.getText();
+                if (text != null) {
+                    String content = text.toString();
+                    if (content.contains("zivpn://")) {
+                        e.setText(content);
+                    }
+                }
+            }
+        }
+
         new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.prof_import)
                 .setView(e)
@@ -483,6 +501,11 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         final EditText e = new EditText(getActivity());
         e.setText(export);
         e.setKeyListener(null); // Make it read-only but selectable
+
+        ClipboardManager clipboard = (ClipboardManager) getActivity().getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = ClipData.newPlainText("VPN Profile", export);
+        clipboard.setPrimaryClip(clip);
+        Toast.makeText(getActivity(), R.string.prof_export_copied, Toast.LENGTH_SHORT).show();
 
         new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.prof_export)

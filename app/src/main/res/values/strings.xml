@@ -55,5 +55,6 @@
     <string name="notify_title">SOCKS5 proxy activated</string>
     <string name="notify_msg">Connected to %s</string>
     <string name="channel_name">Proxy active</string>
+    <string name="prof_export_copied">Profile copied to clipboard</string>
 
 </resources>
