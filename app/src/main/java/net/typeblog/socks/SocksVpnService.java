@@ -21,10 +21,12 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
 import static net.typeblog.socks.BuildConfig.DEBUG;
@@ -218,6 +220,9 @@ public class SocksVpnService extends VpnService {
                 e.printStackTrace();
             }
         } else {
+            if (apps == null) {
+                apps = new String[0];
+            }
             if (bypass) {
                 // First, bypass myself
                 try {
@@ -373,7 +378,10 @@ public class SocksVpnService extends VpnService {
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
-        private final ExecutorService executor = Executors.newCachedThreadPool();
+        private static final int SOCKET_TIMEOUT_MS = 30_000;
+        private final ExecutorService executor = Executors.newFixedThreadPool(
+                Math.max(2, Runtime.getRuntime().availableProcessors())
+        );
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -388,6 +396,7 @@ public class SocksVpnService extends VpnService {
                 serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
                 while (!isInterrupted()) {
                     Socket client = serverSocket.accept();
+                    client.setSoTimeout(SOCKET_TIMEOUT_MS);
                     executor.execute(() -> handleClient(client));
                 }
             } catch (IOException e) {
@@ -399,6 +408,13 @@ public class SocksVpnService extends VpnService {
             interrupt();
             executor.shutdownNow();
             try {
+                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            try {
                 if (serverSocket != null) serverSocket.close();
             } catch (IOException ignored) {}
         }
@@ -407,13 +423,14 @@ public class SocksVpnService extends VpnService {
             Socket proxy = null;
             try {
                 proxy = new Socket("127.0.0.1", proxyPort);
+                proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
                 InputStream in = proxy.getInputStream();
                 OutputStream out = proxy.getOutputStream();
 
                 // Handshake
                 out.write(new byte[]{0x05, 0x01, 0x00});
                 byte[] handshakeResp = new byte[2];
-                if (in.read(handshakeResp) != 2 || handshakeResp[1] != 0x00) {
+                if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) {
                     proxy.close();
                     client.close();
                     return;
@@ -432,7 +449,7 @@ public class SocksVpnService extends VpnService {
                 out.write(request);
 
                 byte[] reply = new byte[10];
-                if (in.read(reply) < 2 || reply[1] != 0x00) {
+                if (!readFully(in, reply, 2) || reply[1] != 0x00) {
                     proxy.close();
                     client.close();
                     return;
@@ -442,6 +459,9 @@ public class SocksVpnService extends VpnService {
                 final Socket finalProxy = proxy;
                 executor.execute(() -> pipe(client, finalProxy));
                 executor.execute(() -> pipe(finalProxy, client));
+            } catch (SocketTimeoutException e) {
+                try { client.close(); } catch (IOException ignored) {}
+                try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
             } catch (IOException e) {
                 try { client.close(); } catch (IOException ignored) {}
                 try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
@@ -462,6 +482,22 @@ public class SocksVpnService extends VpnService {
                 try { s1.close(); } catch (IOException ignored) {}
                 try { s2.close(); } catch (IOException ignored) {}
             }
+        }
+
+        private boolean readFully(InputStream in, byte[] buffer) throws IOException {
+            return readFully(in, buffer, buffer.length);
+        }
+
+        private boolean readFully(InputStream in, byte[] buffer, int expectedLength) throws IOException {
+            int total = 0;
+            while (total < expectedLength) {
+                int read = in.read(buffer, total, expectedLength - total);
+                if (read == -1) {
+                    return false;
+                }
+                total += read;
+            }
+            return true;
         }
     }
 }
