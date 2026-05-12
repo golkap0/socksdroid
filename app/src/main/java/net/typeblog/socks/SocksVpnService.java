@@ -147,6 +147,8 @@ public class SocksVpnService extends VpnService {
         // Kill libuz.so and libload.so
         Utility.exec("pkill -9 -f libuz.so");
         Utility.exec("pkill -9 -f libload.so");
+        Utility.exec("pkill -9 -f libpdnsd.so");
+        Utility.exec("pkill -9 -f libtun2socks.so");
 
         try {
             System.jniclose(mInterface.getFd());
@@ -176,6 +178,7 @@ public class SocksVpnService extends VpnService {
         // Add the default DNS
         // Note that this DNS is just a stub.
         // Actual DNS requests will be redirected through pdnsd.
+        b.addDnsServer("8.8.8.8");
         b.addRoute("8.8.8.8", 32);
 
         // Do app routing
@@ -274,6 +277,10 @@ public class SocksVpnService extends VpnService {
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
         new Thread(() -> Utility.exec(loadCmd)).start();
+
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException ignored) {}
 
         String command = String.format(Locale.US,
                 "%s/libtun2socks.so --netif-ipaddr 26.26.26.2"
