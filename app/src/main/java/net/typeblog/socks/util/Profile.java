@@ -131,6 +131,54 @@ public class Profile {
         mPref.edit().putString(key("udpgw"), gw).apply();
     }
 
+    public String getObfsKey() {
+        return mPref.getString(key("obfs_key"), "hu``hqb`c");
+    }
+
+    public void setObfsKey(String key) {
+        mPref.edit().putString(key("obfs_key"), key).apply();
+    }
+
+    public String getUpLimit() {
+        return mPref.getString(key("up_limit"), "1 Mbps");
+    }
+
+    public void setUpLimit(String limit) {
+        mPref.edit().putString(key("up_limit"), limit).apply();
+    }
+
+    public String getDownLimit() {
+        return mPref.getString(key("down_limit"), "1 Mbps");
+    }
+
+    public void setDownLimit(String limit) {
+        mPref.edit().putString(key("down_limit"), limit).apply();
+    }
+
+    public int getRecvWinConn() {
+        return mPref.getInt(key("recv_win_conn"), 262144);
+    }
+
+    public void setRecvWinConn(int win) {
+        mPref.edit().putInt(key("recv_win_conn"), win).apply();
+    }
+
+    public int getRecvWin() {
+        return mPref.getInt(key("recv_win"), 4194304);
+    }
+
+    public void setRecvWin(int win) {
+        mPref.edit().putInt(key("recv_win"), win).apply();
+    }
+
+    public int getCoreCount() {
+        return mPref.getInt(key("core_count"), 4);
+    }
+
+    public void setCoreCount(int count) {
+        mPref.edit().putInt(key("core_count"), count).apply();
+    }
+
     public boolean autoConnect() {
         return mPref.getBoolean(key("auto"), false);
     }
@@ -155,6 +203,12 @@ public class Profile {
                 .remove(key("ipv6"))
                 .remove(key("udp"))
                 .remove(key("udpgw"))
+                .remove(key("obfs_key"))
+                .remove(key("up_limit"))
+                .remove(key("down_limit"))
+                .remove(key("recv_win_conn"))
+                .remove(key("recv_win"))
+                .remove(key("core_count"))
                 .remove(key("auto"))
                 .apply();
     }
