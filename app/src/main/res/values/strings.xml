@@ -57,4 +57,8 @@
     <string name="channel_name">Proxy active</string>
     <string name="prof_export_copied">Profile copied to clipboard</string>
 
+    <string name="status">Status</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+
 </resources>

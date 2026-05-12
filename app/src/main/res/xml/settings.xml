@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <Preference
+        android:key="vpn_status"
+        android:title="@string/status"
+        android:summary="@string/status_disconnected"/>
+
     <ListPreference
         android:key="profile"
         android:title="@string/profile"/>

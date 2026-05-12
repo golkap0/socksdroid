@@ -67,11 +67,43 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         @Override
         public void run() {
             updateState();
-            mSwitch.postDelayed(this, 1000);
+            if (mSwitch != null) {
+                mSwitch.postDelayed(this, 1000);
+            }
         }
     };
     private IVpnService mBinder;
+    private boolean mMonitoringPort = false;
+    private final Runnable mMonitoringRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!mMonitoringPort) return;
 
+            new Thread(() -> {
+                final boolean isOpen = Utility.isPortOpen(1080);
+
+                Activity activity = getActivity();
+                if (activity == null) return;
+
+                activity.runOnUiThread(() -> {
+                    if (!mMonitoringPort) return;
+
+                    if (isOpen) {
+                        mMonitoringPort = false;
+                        if (mPrefStatus != null) mPrefStatus.setSummary(R.string.status_connected);
+                        if (getActivity() != null) Toast.makeText(getActivity(), R.string.status_connected, Toast.LENGTH_SHORT).show();
+                    } else {
+                        if (mPrefStatus != null) mPrefStatus.setSummary(R.string.status_disconnected);
+                        if (mSwitch != null) {
+                            mSwitch.postDelayed(mMonitoringRunnable, 1000);
+                        }
+                    }
+                });
+            }).start();
+        }
+    };
+
+    private Preference mPrefStatus;
     private ListPreference mPrefProfile, mPrefRoutes;
     private EditTextPreference mPrefServer, mPrefPort, mPrefUsername, mPrefPassword,
             mPrefDns, mPrefDnsPort, mPrefAppList, mPrefUDPGW,
@@ -244,8 +276,17 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     public void onCheckedChanged(CompoundButton p1, boolean checked) {
         if (checked) {
             startVpn();
+            mMonitoringPort = true;
+            if (mSwitch != null) {
+                mSwitch.postDelayed(mMonitoringRunnable, 1000);
+            }
         } else {
             stopVpn();
+            mMonitoringPort = false;
+            if (mSwitch != null) {
+                mSwitch.removeCallbacks(mMonitoringRunnable);
+            }
+            if (mPrefStatus != null) mPrefStatus.setSummary(R.string.status_disconnected);
         }
     }
 
@@ -254,6 +295,9 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         super.onResume();
         if (mSwitch != null) {
             mSwitch.postDelayed(mStateRunnable, 1000);
+            if (mMonitoringPort) {
+                mSwitch.postDelayed(mMonitoringRunnable, 1000);
+            }
         }
     }
 
@@ -262,6 +306,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         super.onPause();
         if (mSwitch != null) {
             mSwitch.removeCallbacks(mStateRunnable);
+            mSwitch.removeCallbacks(mMonitoringRunnable);
         }
     }
 
@@ -269,7 +314,10 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     public void onDestroy() {
         super.onDestroy();
         if (mBinder != null) {
-            getActivity().unbindService(mConnection);
+            Activity activity = getActivity();
+            if (activity != null) {
+                activity.unbindService(mConnection);
+            }
             mBinder = null;
         }
     }
@@ -285,6 +333,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     private void initPreferences() {
+        mPrefStatus = findPreference("vpn_status");
         mPrefProfile = (ListPreference) findPreference(PREF_PROFILE);
         mPrefServer = (EditTextPreference) findPreference(PREF_SERVER_IP);
         mPrefPort = (EditTextPreference) findPreference(PREF_SERVER_PORT);

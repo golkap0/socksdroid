@@ -9,6 +9,8 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.List;
 
 import net.typeblog.socks.R;
@@ -70,7 +72,6 @@ public class Utility {
             Process p = Runtime.getRuntime().exec(new String[]{"kill", String.valueOf(pid)});
             p.waitFor();
             if (p.exitValue() != 0) {
-                // If standard kill failed, try kill -9
                 Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
             }
             if(!file.delete())
@@ -163,6 +164,17 @@ public class Utility {
             context.startForegroundService(i);
         } else {
             context.startService(i);
+        }
+    }
+
+    public static boolean isPortOpen(int port) {
+        try {
+            Socket socket = new Socket();
+            socket.connect(new InetSocketAddress("127.0.0.1", port), 500);
+            socket.close();
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 }
