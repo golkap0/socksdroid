@@ -159,6 +159,10 @@ public class Utility {
             i.putExtra(INTENT_UDP_GW, profile.getUDPGW());
         }
 
-        context.startService(i);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(i);
+        } else {
+            context.startService(i);
+        }
     }
 }
