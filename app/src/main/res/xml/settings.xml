@@ -58,22 +58,26 @@
         <EditTextPreference
             android:key="up_limit"
             android:title="@string/up_limit"
+            android:defaultValue="5 Mbps"
             android:singleLine="true"/>
 
         <EditTextPreference
             android:key="down_limit"
             android:title="@string/down_limit"
+            android:defaultValue="2 Mbps"
             android:singleLine="true"/>
 
         <EditTextPreference
             android:key="recv_win_conn"
             android:title="@string/recv_win_conn"
+            android:defaultValue="1048576"
             android:inputType="number"
             android:singleLine="true"/>
 
         <EditTextPreference
             android:key="recv_win"
             android:title="@string/recv_win"
+            android:defaultValue="3145728"
             android:inputType="number"
             android:singleLine="true"/>
 
@@ -120,11 +124,13 @@
         <EditTextPreference
             android:key="adv_dns"
             android:title="@string/adv_dns"
+            android:defaultValue="9.9.9.9"
             android:singleLine="true"/>
 
         <EditTextPreference
             android:key="adv_dns_port"
             android:title="@string/adv_dns_port"
+            android:defaultValue="9953"
             android:inputType="number"
             android:singleLine="true"/>
 

@@ -68,21 +68,21 @@ public class SocksVpnService extends VpnService {
         final String username = intent.getStringExtra(INTENT_USERNAME);
         final String passwd = intent.getStringExtra(INTENT_PASSWORD);
         final String route = intent.getStringExtra(INTENT_ROUTE);
-        final String dns = intent.getStringExtra(INTENT_DNS);
-        final int dnsPort = intent.getIntExtra(INTENT_DNS_PORT, 53);
+        final String dns = intent.getStringExtra(INTENT_DNS) != null ? intent.getStringExtra(INTENT_DNS) : "9.9.9.9";
+        final int dnsPort = intent.getIntExtra(INTENT_DNS_PORT, 9953);
         final boolean perApp = intent.getBooleanExtra(INTENT_PER_APP, false);
         final boolean appBypass = intent.getBooleanExtra(INTENT_APP_BYPASS, false);
         final String[] appList = intent.getStringArrayExtra(INTENT_APP_LIST);
         final boolean ipv6 = intent.getBooleanExtra(INTENT_IPV6_PROXY, false);
         final String udpgw = intent.getStringExtra(INTENT_UDP_GW);
-        final String obfs = intent.getStringExtra(INTENT_OBFS_KEY);
-        final String up = intent.getStringExtra(INTENT_UP_LIMIT);
-        final String down = intent.getStringExtra(INTENT_DOWN_LIMIT);
-        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 262144);
-        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 4194304);
+        final String obfs = intent.getStringExtra(INTENT_OBFS_KEY) != null ? intent.getStringExtra(INTENT_OBFS_KEY) : "hu``hqb`c";
+        final String up = intent.getStringExtra(INTENT_UP_LIMIT) != null ? intent.getStringExtra(INTENT_UP_LIMIT) : "5 Mbps";
+        final String down = intent.getStringExtra(INTENT_DOWN_LIMIT) != null ? intent.getStringExtra(INTENT_DOWN_LIMIT) : "2 Mbps";
+        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 1048576);
+        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 3145728);
         final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 4);
-        final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST);
-        final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER);
+        final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST) != null ? intent.getStringExtra(INTENT_TUNNEL_HOST) : "ssh-2.chice.me";
+        final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER) != null ? intent.getStringExtra(INTENT_TUNNEL_USER) : "vpnstunnel-bnml0";
 
         // Notifications on Oreo and above need a channel
         Notification.Builder builder;
@@ -115,13 +115,13 @@ public class SocksVpnService extends VpnService {
                 .build());
 
         // Create an fd.
-        configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "8.8.8.8" : dns);
+        configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
         if (DEBUG)
             Log.d(TAG, "fd: " + mInterface.getFd());
 
         if (mInterface != null)
-            start(mInterface.getFd(), server, port, username, passwd, TextUtils.isEmpty(dns) ? "8.8.8.8" : dns, dnsPort, ipv6, udpgw,
+            start(mInterface.getFd(), server, port, username, passwd, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns, dnsPort, ipv6, udpgw,
                     obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
 
         return START_STICKY;
