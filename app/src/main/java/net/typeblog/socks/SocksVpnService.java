@@ -268,7 +268,7 @@ public class SocksVpnService extends VpnService {
         loadCmd[3] = "-lport";
         loadCmd[4] = String.valueOf(loadPort);
         loadCmd[5] = "-tunnel";
-        System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
+        java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
         new Thread(() -> Utility.exec(loadCmd)).start();
 
