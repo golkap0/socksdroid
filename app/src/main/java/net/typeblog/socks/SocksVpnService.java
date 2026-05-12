@@ -15,6 +15,12 @@ import android.util.Log;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -39,6 +45,7 @@ public class SocksVpnService extends VpnService {
     private ParcelFileDescriptor mInterface;
     private boolean mRunning = false;
     private final IBinder mBinder = new VpnBinder();
+    private SocksForwarder mForwarder;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -108,13 +115,13 @@ public class SocksVpnService extends VpnService {
                 .build());
 
         // Create an fd.
-        configure(name, route, perApp, appBypass, appList, ipv6);
+        configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "8.8.8.8" : dns);
 
         if (DEBUG)
             Log.d(TAG, "fd: " + mInterface.getFd());
 
         if (mInterface != null)
-            start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
+            start(mInterface.getFd(), server, port, username, passwd, TextUtils.isEmpty(dns) ? "8.8.8.8" : dns, dnsPort, ipv6, udpgw,
                     obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
 
         return START_STICKY;
@@ -141,6 +148,11 @@ public class SocksVpnService extends VpnService {
     private void stopMe() {
         stopForeground(true);
 
+        if (mForwarder != null) {
+            mForwarder.stopForwarder();
+            mForwarder = null;
+        }
+
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
@@ -160,12 +172,12 @@ public class SocksVpnService extends VpnService {
         stopSelf();
     }
 
-    private void configure(String name, String route, boolean perApp, boolean bypass, String[] apps, boolean ipv6) {
+    private void configure(String name, String route, boolean perApp, boolean bypass, String[] apps, boolean ipv6, String dns) {
         Builder b = new Builder();
         b.setMtu(1500)
                 .setSession(name)
                 .addAddress("26.26.26.1", 24)
-                .addDnsServer("8.8.8.8");
+                .addDnsServer(dns);
 
         if (ipv6) {
             // Route all IPv6 traffic
@@ -178,8 +190,8 @@ public class SocksVpnService extends VpnService {
         // Add the default DNS
         // Note that this DNS is just a stub.
         // Actual DNS requests will be redirected through pdnsd.
-        b.addDnsServer("8.8.8.8");
-        b.addRoute("8.8.8.8", 32);
+        b.addDnsServer(dns);
+        b.addRoute(dns, 32);
 
         // Do app routing
         if (!perApp) {
@@ -229,8 +241,14 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
+        // Start DNS forwarder to bypass port 53 blocking
+        int forwarderPort = 8092;
+        int loadBalancerPort = 7777;
+        mForwarder = new SocksForwarder(forwarderPort, dns, dnsPort, loadBalancerPort);
+        mForwarder.start();
+
         // Start DNS daemon first
-        Utility.makePdnsdConf(this, dns, dnsPort);
+        Utility.makePdnsdConf(this, "127.0.0.1", forwarderPort);
 
         Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
@@ -331,5 +349,100 @@ public class SocksVpnService extends VpnService {
 
         // Should not get here. Must be a failure.
         stopMe();
+    }
+
+    private static class SocksForwarder extends Thread {
+        private final int listenPort;
+        private final String targetHost;
+        private final int targetPort;
+        private final int proxyPort;
+        private ServerSocket serverSocket;
+
+        public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
+            this.listenPort = listenPort;
+            this.targetHost = targetHost;
+            this.targetPort = targetPort;
+            this.proxyPort = proxyPort;
+        }
+
+        @Override
+        public void run() {
+            try {
+                serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
+                while (!isInterrupted()) {
+                    Socket client = serverSocket.accept();
+                    new Thread(() -> handleClient(client)).start();
+                }
+            } catch (IOException e) {
+                // Closed
+            }
+        }
+
+        public void stopForwarder() {
+            interrupt();
+            try {
+                if (serverSocket != null) serverSocket.close();
+            } catch (IOException ignored) {}
+        }
+
+        private void handleClient(Socket client) {
+            try {
+                Socket proxy = new Socket("127.0.0.1", proxyPort);
+                InputStream in = proxy.getInputStream();
+                OutputStream out = proxy.getOutputStream();
+
+                // Handshake
+                out.write(new byte[]{0x05, 0x01, 0x00});
+                byte[] handshakeResp = new byte[2];
+                if (in.read(handshakeResp) != 2 || handshakeResp[1] != 0x00) {
+                    proxy.close();
+                    client.close();
+                    return;
+                }
+
+                // Connect
+                byte[] ip = InetAddress.getByName(targetHost).getAddress();
+                byte[] request = new byte[6 + ip.length];
+                request[0] = 0x05;
+                request[1] = 0x01; // CONNECT
+                request[2] = 0x00;
+                request[3] = 0x01; // IPv4
+                java.lang.System.arraycopy(ip, 0, request, 4, ip.length);
+                request[4 + ip.length] = (byte) (targetPort >> 8);
+                request[5 + ip.length] = (byte) (targetPort & 0xFF);
+                out.write(request);
+
+                byte[] reply = new byte[10];
+                if (in.read(reply) < 2 || reply[1] != 0x00) {
+                    proxy.close();
+                    client.close();
+                    return;
+                }
+
+                // Forwarding
+                Thread t1 = new Thread(() -> pipe(client, proxy));
+                Thread t2 = new Thread(() -> pipe(proxy, client));
+                t1.start();
+                t2.start();
+            } catch (IOException e) {
+                try { client.close(); } catch (IOException ignored) {}
+            }
+        }
+
+        private void pipe(Socket s1, Socket s2) {
+            try {
+                InputStream is = s1.getInputStream();
+                OutputStream os = s2.getOutputStream();
+                byte[] buffer = new byte[4096];
+                int n;
+                while ((n = is.read(buffer)) != -1) {
+                    os.write(buffer, 0, n);
+                }
+            } catch (IOException ignored) {}
+            finally {
+                try { s1.close(); } catch (IOException ignored) {}
+                try { s2.close(); } catch (IOException ignored) {}
+            }
+        }
     }
 }
