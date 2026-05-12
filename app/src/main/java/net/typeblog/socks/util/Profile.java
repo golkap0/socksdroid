@@ -171,11 +171,11 @@ public class Profile {
         mPref.edit().putInt(key("recv_win"), win).apply();
     }
 
-    public int getCoreCount() {
-        return mPref.getInt(key("core_count"), 4);
+    public int getInstanceCount() {
+        return mPref.getInt(key("core_count"), 2);
     }
 
-    public void setCoreCount(int count) {
+    public void setInstanceCount(int count) {
         mPref.edit().putInt(key("core_count"), count).apply();
     }
 

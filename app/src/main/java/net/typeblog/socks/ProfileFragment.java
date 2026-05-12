@@ -76,7 +76,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private EditTextPreference mPrefServer, mPrefPort, mPrefUsername, mPrefPassword,
             mPrefDns, mPrefDnsPort, mPrefAppList, mPrefUDPGW,
             mPrefTunnelHost, mPrefTunnelUser,
-            mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefCoreCount;
+            mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefInstanceCount;
     private CheckBoxPreference mPrefUserpw, mPrefPerApp, mPrefAppBypass, mPrefIPv6, mPrefUDP, mPrefAuto;
 
     @Override
@@ -223,14 +223,14 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             mProfile.setRecvWin(Integer.parseInt(newValue.toString()));
             resetTextN(mPrefRecvWin, newValue);
             return true;
-        } else if (p == mPrefCoreCount) {
+        } else if (p == mPrefInstanceCount) {
             if (TextUtils.isEmpty(newValue.toString()))
                 return false;
             int count = Integer.parseInt(newValue.toString());
             if (count < 1) count = 1;
             if (count > 10) count = 10;
-            mProfile.setCoreCount(count);
-            resetTextN(mPrefCoreCount, count);
+            mProfile.setInstanceCount(count);
+            resetTextN(mPrefInstanceCount, count);
             return true;
         } else if (p == mPrefAuto) {
             mProfile.setAutoConnect(Boolean.parseBoolean(newValue.toString()));
@@ -282,7 +282,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefDownLimit = (EditTextPreference) findPreference(PREF_DOWN_LIMIT);
         mPrefRecvWinConn = (EditTextPreference) findPreference(PREF_RECV_WIN_CONN);
         mPrefRecvWin = (EditTextPreference) findPreference(PREF_RECV_WIN);
-        mPrefCoreCount = (EditTextPreference) findPreference(PREF_CORE_COUNT);
+        mPrefInstanceCount = (EditTextPreference) findPreference(PREF_INSTANCE_COUNT);
         mPrefAuto = (CheckBoxPreference) findPreference(PREF_ADV_AUTO_CONNECT);
 
         mPrefProfile.setOnPreferenceChangeListener(this);
@@ -307,7 +307,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefDownLimit.setOnPreferenceChangeListener(this);
         mPrefRecvWinConn.setOnPreferenceChangeListener(this);
         mPrefRecvWin.setOnPreferenceChangeListener(this);
-        mPrefCoreCount.setOnPreferenceChangeListener(this);
+        mPrefInstanceCount.setOnPreferenceChangeListener(this);
         mPrefAuto.setOnPreferenceChangeListener(this);
     }
 
@@ -343,10 +343,10 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefDownLimit.setText(mProfile.getDownLimit());
         mPrefRecvWinConn.setText(String.valueOf(mProfile.getRecvWinConn()));
         mPrefRecvWin.setText(String.valueOf(mProfile.getRecvWin()));
-        mPrefCoreCount.setText(String.valueOf(mProfile.getCoreCount()));
+        mPrefInstanceCount.setText(String.valueOf(mProfile.getInstanceCount()));
         resetText(mPrefServer, mPrefPort, mPrefUsername, mPrefPassword, mPrefDns, mPrefDnsPort, mPrefUDPGW,
                 mPrefTunnelHost, mPrefTunnelUser,
-                mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefCoreCount);
+                mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefInstanceCount);
 
         mPrefAppList.setText(mProfile.getAppList());
     }

@@ -136,7 +136,7 @@ public class Utility {
                 .putExtra(INTENT_DOWN_LIMIT, profile.getDownLimit())
                 .putExtra(INTENT_RECV_WIN_CONN, profile.getRecvWinConn())
                 .putExtra(INTENT_RECV_WIN, profile.getRecvWin())
-                .putExtra(INTENT_CORE_COUNT, profile.getCoreCount())
+                .putExtra(INTENT_INSTANCE_COUNT, profile.getInstanceCount())
                 .putExtra(INTENT_TUNNEL_HOST, profile.getTunnelHost())
                 .putExtra(INTENT_TUNNEL_USER, profile.getTunnelUser());
 

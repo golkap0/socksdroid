@@ -23,7 +23,7 @@
     <string name="down_limit">Download Limit (0 to disable)</string>
     <string name="recv_win_conn">Recv Window Connection</string>
     <string name="recv_win">Recv Window</string>
-    <string name="core_count">Core Count (1-10)</string>
+    <string name="core_count">Tunnel Instances (1-10)</string>
 
     <string name="authentication">Authentication</string>
     <string name="auth_userpw">Username &amp; Password Authentication</string>

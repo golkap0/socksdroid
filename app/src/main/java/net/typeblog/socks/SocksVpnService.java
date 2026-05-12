@@ -80,7 +80,7 @@ public class SocksVpnService extends VpnService {
         final String down = intent.getStringExtra(INTENT_DOWN_LIMIT) != null ? intent.getStringExtra(INTENT_DOWN_LIMIT) : "2 Mbps";
         final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 1048576);
         final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 3145728);
-        final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 4);
+        final int instanceCount = intent.getIntExtra(INTENT_INSTANCE_COUNT, 2);
         final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST) != null ? intent.getStringExtra(INTENT_TUNNEL_HOST) : "ssh-2.chice.me";
         final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER) != null ? intent.getStringExtra(INTENT_TUNNEL_USER) : "vpnstunnel-bnml0";
 
@@ -122,7 +122,7 @@ public class SocksVpnService extends VpnService {
 
         if (mInterface != null)
             start(mInterface.getFd(), server, port, username, passwd, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns, dnsPort, ipv6, udpgw,
-                    obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+                    obfs, up, down, recvWinConn, recvWin, instanceCount, tunHost, tunUser);
 
         return START_STICKY;
     }
@@ -239,7 +239,7 @@ public class SocksVpnService extends VpnService {
     }
 
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
-                       String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
+                       String obfs, String up, String down, int recvWinConn, int recvWin, int instanceCount,
                        String tunHost, String tunUser) {
         // Start DNS forwarder to bypass port 53 blocking
         int forwarderPort = 8092;
@@ -256,7 +256,7 @@ public class SocksVpnService extends VpnService {
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
         String serverPorts = "6000-7750,7751-9500,9501-11225,11251-13000,13001-14750,14751-16500,16501-18250,18251-19999";
-        for (int i = 0; i < coreCount; i++) {
+        for (int i = 0; i < instanceCount; i++) {
             int listenPort = 1080 + i;
             String jsonConfig = String.format(Locale.US,
                     "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
