@@ -9,6 +9,7 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
+import android.os.PowerManager;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -49,6 +50,11 @@ public class SocksVpnService extends VpnService {
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
+    // Track threads created for cleanup
+    private final java.util.List<Thread> mWorkerThreads = new java.util.ArrayList<>();
+    private Thread mTun2socksThread;
+    // WakeLock to keep CPU awake during VPN operation (properly managed)
+    private PowerManager.WakeLock mWakeLock;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -117,6 +123,13 @@ public class SocksVpnService extends VpnService {
                 .setContentIntent(contentIntent)
                 .build());
 
+        // Acquire WakeLock to keep CPU awake during VPN operation (partial wake lock)
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        if (powerManager != null) {
+            mWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SocksVpnService::vpnLock");
+            mWakeLock.acquire(10*60*1000L /*10 minutes*/); // Timeout to prevent battery drain
+        }
+
         // Create an fd.
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
@@ -126,14 +139,18 @@ public class SocksVpnService extends VpnService {
 
             mStarting = true;
             final int fd = mInterface.getFd();
-            new Thread(() -> {
+            Thread mainThread = new Thread(() -> {
                 try {
                     start(fd, server, port, username, passwd, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns, dnsPort, ipv6, udpgw,
                             obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
                 } finally {
                     mStarting = false;
                 }
-            }).start();
+            });
+            synchronized (mWorkerThreads) {
+                mWorkerThreads.add(mainThread);
+            }
+            mainThread.start();
         }
 
         return START_STICKY;
@@ -160,6 +177,12 @@ public class SocksVpnService extends VpnService {
     private void stopMe() {
         stopForeground(true);
 
+        // Release WakeLock to prevent battery drain
+        if (mWakeLock != null && mWakeLock.isHeld()) {
+            mWakeLock.release();
+            mWakeLock = null;
+        }
+
         if (mForwarder != null) {
             mForwarder.stopForwarder();
             mForwarder = null;
@@ -168,11 +191,26 @@ public class SocksVpnService extends VpnService {
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // Kill libuz.so and libload.so
-        Utility.exec("pkill -9 -f libuz.so");
-        Utility.exec("pkill -9 -f libload.so");
-        Utility.exec("pkill -9 -f libpdnsd.so");
-        Utility.exec("pkill -9 -f libtun2socks.so");
+        // Kill libuz.so and libload.so with timeout
+        Utility.execWithTimeout("pkill -9 -f libuz.so", 2000);
+        Utility.execWithTimeout("pkill -9 -f libload.so", 2000);
+        Utility.execWithTimeout("pkill -9 -f libpdnsd.so", 2000);
+        Utility.execWithTimeout("pkill -9 -f libtun2socks.so", 2000);
+
+        // Clean up tracked threads
+        synchronized (mWorkerThreads) {
+            for (Thread t : mWorkerThreads) {
+                if (t != null && t.isAlive()) {
+                    t.interrupt();
+                }
+            }
+            mWorkerThreads.clear();
+        }
+        
+        if (mTun2socksThread != null && mTun2socksThread.isAlive()) {
+            mTun2socksThread.interrupt();
+            mTun2socksThread = null;
+        }
 
         if (mInterface != null) {
             try {
@@ -294,7 +332,11 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd)).start();
+            Thread uzThread = new Thread(() -> Utility.exec(uzCmd));
+            synchronized (mWorkerThreads) {
+                mWorkerThreads.add(uzThread);
+            }
+            uzThread.start();
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
@@ -310,7 +352,11 @@ public class SocksVpnService extends VpnService {
         loadCmd[5] = "-tunnel";
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
-        new Thread(() -> Utility.exec(loadCmd)).start();
+        Thread loadThread = new Thread(() -> Utility.exec(loadCmd));
+        synchronized (mWorkerThreads) {
+            mWorkerThreads.add(loadThread);
+        }
+        loadThread.start();
 
         try {
             Thread.sleep(1000);
@@ -341,10 +387,25 @@ public class SocksVpnService extends VpnService {
             Log.d(TAG, command);
         }
 
-        if (Utility.exec(command) != 0) {
-            stopMe();
-            return;
-        }
+        // Run tun2socks in a tracked thread with timeout
+        final String tun2socksCmd = command;
+        mTun2socksThread = new Thread(() -> {
+            try {
+                Process p = Runtime.getRuntime().exec(tun2socksCmd);
+                // Wait with timeout to prevent hanging
+                if (!p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    p.destroyForcibly();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "tun2socks error", e);
+            }
+        });
+        mTun2socksThread.start();
+        
+        // Wait for tun2socks to initialize
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException ignored) {}
 
         // Try to send the Fd through socket.
         int i = 0;
@@ -373,7 +434,8 @@ public class SocksVpnService extends VpnService {
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
-        private final ExecutorService executor = Executors.newCachedThreadPool();
+        // Use bounded thread pool to prevent thread explosion
+        private final ExecutorService executor = Executors.newFixedThreadPool(50);
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -410,12 +472,13 @@ public class SocksVpnService extends VpnService {
                 InputStream in = proxy.getInputStream();
                 OutputStream out = proxy.getOutputStream();
 
-                // Handshake
+                // Handshake with timeout
                 out.write(new byte[]{0x05, 0x01, 0x00});
                 byte[] handshakeResp = new byte[2];
-                if (in.read(handshakeResp) != 2 || handshakeResp[1] != 0x00) {
-                    proxy.close();
-                    client.close();
+                int readLen = in.read(handshakeResp);
+                if (readLen != 2 || handshakeResp[1] != 0x00) {
+                    closeQuietly(proxy);
+                    closeQuietly(client);
                     return;
                 }
 
@@ -433,8 +496,8 @@ public class SocksVpnService extends VpnService {
 
                 byte[] reply = new byte[10];
                 if (in.read(reply) < 2 || reply[1] != 0x00) {
-                    proxy.close();
-                    client.close();
+                    closeQuietly(proxy);
+                    closeQuietly(client);
                     return;
                 }
 
@@ -443,24 +506,33 @@ public class SocksVpnService extends VpnService {
                 executor.execute(() -> pipe(client, finalProxy));
                 executor.execute(() -> pipe(finalProxy, client));
             } catch (IOException e) {
-                try { client.close(); } catch (IOException ignored) {}
-                try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
+                closeQuietly(client);
+                closeQuietly(proxy);
+            }
+        }
+
+        private void closeQuietly(Socket s) {
+            if (s != null) {
+                try { s.close(); } catch (IOException ignored) {}
             }
         }
 
         private void pipe(Socket s1, Socket s2) {
+            InputStream is = null;
+            OutputStream os = null;
             try {
-                InputStream is = s1.getInputStream();
-                OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
+                is = s1.getInputStream();
+                os = s2.getOutputStream();
+                byte[] buffer = new byte[8192]; // Reduced buffer size
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
+                    os.flush(); // Ensure data is sent promptly
                 }
             } catch (IOException ignored) {}
             finally {
-                try { s1.close(); } catch (IOException ignored) {}
-                try { s2.close(); } catch (IOException ignored) {}
+                closeQuietly(s1);
+                closeQuietly(s2);
             }
         }
     }

@@ -66,11 +66,17 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private final Runnable mStateRunnable = new Runnable() {
         @Override
         public void run() {
+            if (mDestroyed || mSwitch == null) return;
+            
             updateState();
-            mSwitch.postDelayed(this, 1000);
+            // Only continue polling if VPN is starting/stopping to reduce battery drain
+            // When stable, poll less frequently (every 3 seconds instead of 1)
+            long delay = (mStarting || mStopping) ? 1000 : 3000;
+            mSwitch.postDelayed(this, delay);
         }
     };
     private IVpnService mBinder;
+    private boolean mDestroyed = false;
 
     private ListPreference mPrefProfile, mPrefRoutes;
     private EditTextPreference mPrefServer, mPrefPort, mPrefUsername, mPrefPassword,
@@ -252,7 +258,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onResume() {
         super.onResume();
-        if (mSwitch != null) {
+        if (mSwitch != null && !mDestroyed) {
+            mSwitch.removeCallbacks(mStateRunnable);
             mSwitch.postDelayed(mStateRunnable, 1000);
         }
     }
@@ -267,11 +274,21 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     @Override
     public void onDestroy() {
-        super.onDestroy();
+        mDestroyed = true;
+        // Stop the polling runnable immediately
+        if (mSwitch != null) {
+            mSwitch.removeCallbacks(mStateRunnable);
+        }
+        // Unbind service only once
         if (mBinder != null) {
-            getActivity().unbindService(mConnection);
+            try {
+                getActivity().unbindService(mConnection);
+            } catch (IllegalArgumentException e) {
+                // Service was already unbound
+            }
             mBinder = null;
         }
+        super.onDestroy();
     }
 
     @Override

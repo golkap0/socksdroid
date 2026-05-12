@@ -17,23 +17,38 @@ import static net.typeblog.socks.util.Constants.*;
 
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
+    private static final int PROCESS_TIMEOUT_SECONDS = 10;
 
     public static int exec(String cmd) {
+        Process p = null;
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
-
+            p = Runtime.getRuntime().exec(cmd);
+            if (!p.waitFor(PROCESS_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return -1;
+            }
             return p.waitFor();
         } catch (Exception e) {
+            if (p != null && p.isAlive()) {
+                p.destroyForcibly();
+            }
             return -1;
         }
     }
 
     public static int exec(String[] cmd) {
+        Process p = null;
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
-
+            p = Runtime.getRuntime().exec(cmd);
+            if (!p.waitFor(PROCESS_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return -1;
+            }
             return p.waitFor();
         } catch (Exception e) {
+            if (p != null && p.isAlive()) {
+                p.destroyForcibly();
+            }
             return -1;
         }
     }
@@ -45,7 +60,7 @@ public class Utility {
             return;
         }
 
-        InputStream i;
+        InputStream i = null;
         try {
             i = new FileInputStream(file);
         } catch (Exception e) {
@@ -60,18 +75,26 @@ public class Utility {
             while ((len = i.read(buf, 0, 512)) > 0) {
                 str.append(new String(buf, 0, len));
             }
-            i.close();
         } catch (Exception e) {
-            return;
+            // Ignore read errors
+        } finally {
+            if (i != null) {
+                try { i.close(); } catch (IOException ignored) {}
+            }
         }
 
         try {
             int pid = Integer.parseInt(str.toString().trim().replace("\n", ""));
             Process p = Runtime.getRuntime().exec(new String[]{"kill", String.valueOf(pid)});
-            p.waitFor();
+            if (!p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+            }
             if (p.exitValue() != 0) {
                 // If standard kill failed, try kill -9
-                Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
+                Process p9 = Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)});
+                if (!p9.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    p9.destroyForcibly();
+                }
             }
             if(!file.delete())
                 Log.w(TAG, "failed to delete pidfile");
