@@ -67,7 +67,12 @@ public class Utility {
 
         try {
             int pid = Integer.parseInt(str.toString().trim().replace("\n", ""));
-            Runtime.getRuntime().exec("kill " + pid).waitFor();
+            Process p = Runtime.getRuntime().exec(new String[]{"kill", String.valueOf(pid)});
+            p.waitFor();
+            if (p.exitValue() != 0) {
+                // If standard kill failed, try kill -9
+                Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
+            }
             if(!file.delete())
                 Log.w(TAG, "failed to delete pidfile");
         } catch (Exception e) {

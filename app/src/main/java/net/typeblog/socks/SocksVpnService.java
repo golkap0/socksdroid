@@ -23,6 +23,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static net.typeblog.socks.util.Constants.*;
 import static net.typeblog.socks.BuildConfig.DEBUG;
@@ -80,7 +82,7 @@ public class SocksVpnService extends VpnService {
         final String down = intent.getStringExtra(INTENT_DOWN_LIMIT) != null ? intent.getStringExtra(INTENT_DOWN_LIMIT) : "2 Mbps";
         final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 1048576);
         final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 3145728);
-        final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 4);
+        final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 2);
         final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST) != null ? intent.getStringExtra(INTENT_TUNNEL_HOST) : "ssh-2.chice.me";
         final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER) != null ? intent.getStringExtra(INTENT_TUNNEL_USER) : "vpnstunnel-bnml0";
 
@@ -357,6 +359,7 @@ public class SocksVpnService extends VpnService {
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
+        private final ExecutorService executor = Executors.newFixedThreadPool(16);
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -371,7 +374,7 @@ public class SocksVpnService extends VpnService {
                 serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
                 while (!isInterrupted()) {
                     Socket client = serverSocket.accept();
-                    new Thread(() -> handleClient(client)).start();
+                    executor.execute(() -> handleClient(client));
                 }
             } catch (IOException e) {
                 // Closed
@@ -380,6 +383,7 @@ public class SocksVpnService extends VpnService {
 
         public void stopForwarder() {
             interrupt();
+            executor.shutdownNow();
             try {
                 if (serverSocket != null) serverSocket.close();
             } catch (IOException ignored) {}
@@ -420,10 +424,8 @@ public class SocksVpnService extends VpnService {
                 }
 
                 // Forwarding
-                Thread t1 = new Thread(() -> pipe(client, proxy));
-                Thread t2 = new Thread(() -> pipe(proxy, client));
-                t1.start();
-                t2.start();
+                executor.execute(() -> pipe(client, proxy));
+                executor.execute(() -> pipe(proxy, client));
             } catch (IOException e) {
                 try { client.close(); } catch (IOException ignored) {}
             }
@@ -433,7 +435,7 @@ public class SocksVpnService extends VpnService {
             try {
                 InputStream is = s1.getInputStream();
                 OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[4096];
+                byte[] buffer = new byte[16384];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);

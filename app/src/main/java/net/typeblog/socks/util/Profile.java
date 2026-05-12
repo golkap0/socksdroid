@@ -172,7 +172,7 @@ public class Profile {
     }
 
     public int getCoreCount() {
-        return mPref.getInt(key("core_count"), 4);
+        return mPref.getInt(key("core_count"), 2);
     }
 
     public void setCoreCount(int count) {
