@@ -448,8 +448,33 @@ public class SocksVpnService extends VpnService {
                 request[5 + ip.length] = (byte) (targetPort & 0xFF);
                 out.write(request);
 
-                byte[] reply = new byte[10];
-                if (!readFully(in, reply, 2) || reply[1] != 0x00) {
+                byte[] replyHeader = new byte[4];
+                if (!readFully(in, replyHeader) || replyHeader[1] != 0x00) {
+                    proxy.close();
+                    client.close();
+                    return;
+                }
+                int atyp = replyHeader[3] & 0xFF;
+                int addrLen;
+                if (atyp == 0x01) { // IPv4
+                    addrLen = 4;
+                } else if (atyp == 0x04) { // IPv6
+                    addrLen = 16;
+                } else if (atyp == 0x03) { // DOMAIN
+                    int domainLen = in.read();
+                    if (domainLen == -1) {
+                        proxy.close();
+                        client.close();
+                        return;
+                    }
+                    addrLen = domainLen;
+                } else {
+                    proxy.close();
+                    client.close();
+                    return;
+                }
+                byte[] replyBody = new byte[addrLen + 2];
+                if (!readFully(in, replyBody)) {
                     proxy.close();
                     client.close();
                     return;
