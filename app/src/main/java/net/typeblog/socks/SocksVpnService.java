@@ -21,10 +21,12 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
 import static net.typeblog.socks.BuildConfig.DEBUG;
@@ -83,7 +85,7 @@ public class SocksVpnService extends VpnService {
         final String down = intent.getStringExtra(INTENT_DOWN_LIMIT) != null ? intent.getStringExtra(INTENT_DOWN_LIMIT) : "2 Mbps";
         final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 1048576);
         final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 3145728);
-        final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 2);
+        final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 1);
         final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST) != null ? intent.getStringExtra(INTENT_TUNNEL_HOST) : "ssh-2.chice.me";
         final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER) != null ? intent.getStringExtra(INTENT_TUNNEL_USER) : "vpnstunnel-bnml0";
 
@@ -218,6 +220,9 @@ public class SocksVpnService extends VpnService {
                 e.printStackTrace();
             }
         } else {
+            if (apps == null) {
+                apps = new String[0];
+            }
             if (bypass) {
                 // First, bypass myself
                 try {
@@ -257,6 +262,9 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
+        int maxRecommendedCores = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
+        int workerCoreCount = Math.max(1, Math.min(coreCount, maxRecommendedCores));
+
         // Start DNS forwarder to bypass port 53 blocking
         int forwarderPort = 8092;
         int loadBalancerPort = 7777;
@@ -272,7 +280,7 @@ public class SocksVpnService extends VpnService {
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
         String serverPorts = "6000-7750,7751-9500,9501-11225,11251-13000,13001-14750,14751-16500,16501-18250,18251-19999";
-        for (int i = 0; i < coreCount; i++) {
+        for (int i = 0; i < workerCoreCount; i++) {
             int listenPort = 1080 + i;
             String jsonConfig = String.format(Locale.US,
                     "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
@@ -373,7 +381,10 @@ public class SocksVpnService extends VpnService {
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
-        private final ExecutorService executor = Executors.newCachedThreadPool();
+        private static final int SOCKET_TIMEOUT_MS = 30_000;
+        private final ExecutorService executor = Executors.newFixedThreadPool(
+                Math.max(2, Runtime.getRuntime().availableProcessors())
+        );
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -388,6 +399,7 @@ public class SocksVpnService extends VpnService {
                 serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
                 while (!isInterrupted()) {
                     Socket client = serverSocket.accept();
+                    client.setSoTimeout(SOCKET_TIMEOUT_MS);
                     executor.execute(() -> handleClient(client));
                 }
             } catch (IOException e) {
@@ -399,6 +411,13 @@ public class SocksVpnService extends VpnService {
             interrupt();
             executor.shutdownNow();
             try {
+                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            try {
                 if (serverSocket != null) serverSocket.close();
             } catch (IOException ignored) {}
         }
@@ -407,13 +426,14 @@ public class SocksVpnService extends VpnService {
             Socket proxy = null;
             try {
                 proxy = new Socket("127.0.0.1", proxyPort);
+                proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
                 InputStream in = proxy.getInputStream();
                 OutputStream out = proxy.getOutputStream();
 
                 // Handshake
                 out.write(new byte[]{0x05, 0x01, 0x00});
                 byte[] handshakeResp = new byte[2];
-                if (in.read(handshakeResp) != 2 || handshakeResp[1] != 0x00) {
+                if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) {
                     proxy.close();
                     client.close();
                     return;
@@ -431,8 +451,33 @@ public class SocksVpnService extends VpnService {
                 request[5 + ip.length] = (byte) (targetPort & 0xFF);
                 out.write(request);
 
-                byte[] reply = new byte[10];
-                if (in.read(reply) < 2 || reply[1] != 0x00) {
+                byte[] replyHeader = new byte[4];
+                if (!readFully(in, replyHeader) || replyHeader[1] != 0x00) {
+                    proxy.close();
+                    client.close();
+                    return;
+                }
+                int atyp = replyHeader[3] & 0xFF;
+                int addrLen;
+                if (atyp == 0x01) { // IPv4
+                    addrLen = 4;
+                } else if (atyp == 0x04) { // IPv6
+                    addrLen = 16;
+                } else if (atyp == 0x03) { // DOMAIN
+                    int domainLen = in.read();
+                    if (domainLen == -1) {
+                        proxy.close();
+                        client.close();
+                        return;
+                    }
+                    addrLen = domainLen;
+                } else {
+                    proxy.close();
+                    client.close();
+                    return;
+                }
+                byte[] replyBody = new byte[addrLen + 2];
+                if (!readFully(in, replyBody)) {
                     proxy.close();
                     client.close();
                     return;
@@ -442,6 +487,9 @@ public class SocksVpnService extends VpnService {
                 final Socket finalProxy = proxy;
                 executor.execute(() -> pipe(client, finalProxy));
                 executor.execute(() -> pipe(finalProxy, client));
+            } catch (SocketTimeoutException e) {
+                try { client.close(); } catch (IOException ignored) {}
+                try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
             } catch (IOException e) {
                 try { client.close(); } catch (IOException ignored) {}
                 try { if (proxy != null) proxy.close(); } catch (IOException ignored) {}
@@ -462,6 +510,22 @@ public class SocksVpnService extends VpnService {
                 try { s1.close(); } catch (IOException ignored) {}
                 try { s2.close(); } catch (IOException ignored) {}
             }
+        }
+
+        private boolean readFully(InputStream in, byte[] buffer) throws IOException {
+            return readFully(in, buffer, buffer.length);
+        }
+
+        private boolean readFully(InputStream in, byte[] buffer, int expectedLength) throws IOException {
+            int total = 0;
+            while (total < expectedLength) {
+                int read = in.read(buffer, total, expectedLength - total);
+                if (read == -1) {
+                    return false;
+                }
+                total += read;
+            }
+            return true;
         }
     }
 }

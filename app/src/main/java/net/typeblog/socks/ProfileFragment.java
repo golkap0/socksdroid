@@ -42,9 +42,15 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private Switch mSwitch;
     private boolean mRunning = false;
     private boolean mStarting = false, mStopping = false;
+    private boolean mBinding = false;
+    private boolean mBound = false;
+    private long mLastBindAttemptMs = 0L;
+    private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName p1, IBinder binder) {
+            mBinding = false;
+            mBound = true;
             mBinder = IVpnService.Stub.asInterface(binder);
 
             try {
@@ -60,6 +66,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
         @Override
         public void onServiceDisconnected(ComponentName p1) {
+            mBound = false;
+            mBinding = false;
             mBinder = null;
         }
     };
@@ -268,10 +276,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (mBinder != null) {
+        if (mBound) {
             getActivity().unbindService(mConnection);
-            mBinder = null;
         }
+        mBinder = null;
+        mBound = false;
+        mBinding = false;
     }
 
     @Override
@@ -539,8 +549,22 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mSwitch.setEnabled(false);
         mSwitch.setOnCheckedChangeListener(null);
 
-        if (mBinder == null) {
-            getActivity().bindService(new Intent(getActivity(), SocksVpnService.class), mConnection, 0);
+        if (mBinder == null && !mBound && !mBinding) {
+            long now = java.lang.System.currentTimeMillis();
+            if (now - mLastBindAttemptMs < BIND_RETRY_INTERVAL_MS) {
+                mSwitch.setEnabled(true);
+                mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
+                return;
+            }
+
+            mLastBindAttemptMs = now;
+            mBinding = true;
+            boolean bindOk = getActivity().bindService(new Intent(getActivity(), SocksVpnService.class), mConnection, 0);
+            if (!bindOk) {
+                mBinding = false;
+                mSwitch.setEnabled(true);
+                mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
+            }
         }
     }
 
@@ -597,7 +621,11 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
         mBinder = null;
 
-        getActivity().unbindService(mConnection);
+        if (mBound) {
+            getActivity().unbindService(mConnection);
+        }
+        mBound = false;
+        mBinding = false;
         checkState();
     }
 }
