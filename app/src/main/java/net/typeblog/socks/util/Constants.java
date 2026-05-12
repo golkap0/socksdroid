@@ -18,7 +18,13 @@ public class Constants
             INTENT_APP_BYPASS = INTENT_PREFIX + "APPBYPASS",
             INTENT_APP_LIST = INTENT_PREFIX + "APPLIST",
             INTENT_IPV6_PROXY = INTENT_PREFIX + "IPV6",
-            INTENT_UDP_GW = INTENT_PREFIX + "UDPGW";
+            INTENT_UDP_GW = INTENT_PREFIX + "UDPGW",
+            INTENT_OBFS_KEY = INTENT_PREFIX + "OBFS",
+            INTENT_UP_LIMIT = INTENT_PREFIX + "UP",
+            INTENT_DOWN_LIMIT = INTENT_PREFIX + "DOWN",
+            INTENT_RECV_WIN_CONN = INTENT_PREFIX + "RECVWINCONN",
+            INTENT_RECV_WIN = INTENT_PREFIX + "RECVWIN",
+            INTENT_CORE_COUNT = INTENT_PREFIX + "CORECOUNT";
 
     public static final String PREF = "profile",
             PREF_PROFILE = "profile",
@@ -28,6 +34,12 @@ public class Constants
             PREF_IPV6_PROXY = "ipv6_proxy",
             PREF_UDP_PROXY = "udp_proxy",
             PREF_UDP_GW = "udp_gw",
+            PREF_OBFS_KEY = "obfs_key",
+            PREF_UP_LIMIT = "up_limit",
+            PREF_DOWN_LIMIT = "down_limit",
+            PREF_RECV_WIN_CONN = "recv_win_conn",
+            PREF_RECV_WIN = "recv_win",
+            PREF_CORE_COUNT = "core_count",
             PREF_AUTH_USERPW = "auth_userpw",
             PREF_AUTH_USERNAME = "auth_username",
             PREF_AUTH_PASSWORD = "auth_password",

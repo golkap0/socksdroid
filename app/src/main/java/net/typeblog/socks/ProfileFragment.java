@@ -71,7 +71,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     private ListPreference mPrefProfile, mPrefRoutes;
     private EditTextPreference mPrefServer, mPrefPort, mPrefUsername, mPrefPassword,
-            mPrefDns, mPrefDnsPort, mPrefAppList, mPrefUDPGW;
+            mPrefDns, mPrefDnsPort, mPrefAppList, mPrefUDPGW,
+            mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefCoreCount;
     private CheckBoxPreference mPrefUserpw, mPrefPerApp, mPrefAppBypass, mPrefIPv6, mPrefUDP, mPrefAuto;
 
     @Override
@@ -104,6 +105,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             return true;
         } else if (id == R.id.prof_del) {
             removeProfile();
+            return true;
+        } else if (id == R.id.prof_import) {
+            importProfile();
+            return true;
+        } else if (id == R.id.prof_export) {
+            exportProfile();
             return true;
         } else {
             return super.onOptionsItemSelected(item);
@@ -180,6 +187,39 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             mProfile.setUDPGW(newValue.toString());
             resetTextN(mPrefUDPGW, newValue);
             return true;
+        } else if (p == mPrefObfsKey) {
+            mProfile.setObfsKey(newValue.toString());
+            resetTextN(mPrefObfsKey, newValue);
+            return true;
+        } else if (p == mPrefUpLimit) {
+            mProfile.setUpLimit(newValue.toString());
+            resetTextN(mPrefUpLimit, newValue);
+            return true;
+        } else if (p == mPrefDownLimit) {
+            mProfile.setDownLimit(newValue.toString());
+            resetTextN(mPrefDownLimit, newValue);
+            return true;
+        } else if (p == mPrefRecvWinConn) {
+            if (TextUtils.isEmpty(newValue.toString()))
+                return false;
+            mProfile.setRecvWinConn(Integer.parseInt(newValue.toString()));
+            resetTextN(mPrefRecvWinConn, newValue);
+            return true;
+        } else if (p == mPrefRecvWin) {
+            if (TextUtils.isEmpty(newValue.toString()))
+                return false;
+            mProfile.setRecvWin(Integer.parseInt(newValue.toString()));
+            resetTextN(mPrefRecvWin, newValue);
+            return true;
+        } else if (p == mPrefCoreCount) {
+            if (TextUtils.isEmpty(newValue.toString()))
+                return false;
+            int count = Integer.parseInt(newValue.toString());
+            if (count < 1) count = 1;
+            if (count > 10) count = 10;
+            mProfile.setCoreCount(count);
+            resetTextN(mPrefCoreCount, count);
+            return true;
         } else if (p == mPrefAuto) {
             mProfile.setAutoConnect(Boolean.parseBoolean(newValue.toString()));
             return true;
@@ -223,6 +263,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefIPv6 = (CheckBoxPreference) findPreference(PREF_IPV6_PROXY);
         mPrefUDP = (CheckBoxPreference) findPreference(PREF_UDP_PROXY);
         mPrefUDPGW = (EditTextPreference) findPreference(PREF_UDP_GW);
+        mPrefObfsKey = (EditTextPreference) findPreference(PREF_OBFS_KEY);
+        mPrefUpLimit = (EditTextPreference) findPreference(PREF_UP_LIMIT);
+        mPrefDownLimit = (EditTextPreference) findPreference(PREF_DOWN_LIMIT);
+        mPrefRecvWinConn = (EditTextPreference) findPreference(PREF_RECV_WIN_CONN);
+        mPrefRecvWin = (EditTextPreference) findPreference(PREF_RECV_WIN);
+        mPrefCoreCount = (EditTextPreference) findPreference(PREF_CORE_COUNT);
         mPrefAuto = (CheckBoxPreference) findPreference(PREF_ADV_AUTO_CONNECT);
 
         mPrefProfile.setOnPreferenceChangeListener(this);
@@ -240,6 +286,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefIPv6.setOnPreferenceChangeListener(this);
         mPrefUDP.setOnPreferenceChangeListener(this);
         mPrefUDPGW.setOnPreferenceChangeListener(this);
+        mPrefObfsKey.setOnPreferenceChangeListener(this);
+        mPrefUpLimit.setOnPreferenceChangeListener(this);
+        mPrefDownLimit.setOnPreferenceChangeListener(this);
+        mPrefRecvWinConn.setOnPreferenceChangeListener(this);
+        mPrefRecvWin.setOnPreferenceChangeListener(this);
+        mPrefCoreCount.setOnPreferenceChangeListener(this);
         mPrefAuto.setOnPreferenceChangeListener(this);
     }
 
@@ -268,7 +320,14 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefDns.setText(mProfile.getDns());
         mPrefDnsPort.setText(String.valueOf(mProfile.getDnsPort()));
         mPrefUDPGW.setText(mProfile.getUDPGW());
-        resetText(mPrefServer, mPrefPort, mPrefUsername, mPrefPassword, mPrefDns, mPrefDnsPort, mPrefUDPGW);
+        mPrefObfsKey.setText(mProfile.getObfsKey());
+        mPrefUpLimit.setText(mProfile.getUpLimit());
+        mPrefDownLimit.setText(mProfile.getDownLimit());
+        mPrefRecvWinConn.setText(String.valueOf(mProfile.getRecvWinConn()));
+        mPrefRecvWin.setText(String.valueOf(mProfile.getRecvWin()));
+        mPrefCoreCount.setText(String.valueOf(mProfile.getCoreCount()));
+        resetText(mPrefServer, mPrefPort, mPrefUsername, mPrefPassword, mPrefDns, mPrefDnsPort, mPrefUDPGW,
+                mPrefObfsKey, mPrefUpLimit, mPrefDownLimit, mPrefRecvWinConn, mPrefRecvWin, mPrefCoreCount);
 
         mPrefAppList.setText(mProfile.getAppList());
     }
@@ -338,6 +397,56 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                 .setNegativeButton(android.R.string.cancel, (d, which) -> {
 
                 })
+                .create().show();
+    }
+
+    private void importProfile() {
+        final EditText e = new EditText(getActivity());
+        e.setHint("zivpn://server@udpauth");
+
+        new AlertDialog.Builder(getActivity())
+                .setTitle(R.string.prof_import)
+                .setView(e)
+                .setPositiveButton(android.R.string.ok, (d, which) -> {
+                    String input = e.getText().toString().trim();
+                    if (TextUtils.isEmpty(input)) return;
+
+                    String[] lines = input.split("\\n");
+                    for (String line : lines) {
+                        line = line.trim();
+                        if (line.startsWith("zivpn://")) {
+                            String content = line.substring(8);
+                            String[] parts = content.split("@");
+                            if (parts.length == 2) {
+                                String server = parts[0];
+                                String auth = parts[1];
+                                Profile p = mManager.addProfile(server);
+                                if (p != null) {
+                                    p.setServer(server);
+                                    p.setIsUserpw(true);
+                                    p.setUsername(auth);
+                                    p.setPassword(auth); // Use auth for both as per requested format
+                                    mProfile = p;
+                                }
+                            }
+                        }
+                    }
+                    reload();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .create().show();
+    }
+
+    private void exportProfile() {
+        String export = String.format("zivpn://%s@%s", mProfile.getServer(), mProfile.getUsername());
+        final EditText e = new EditText(getActivity());
+        e.setText(export);
+        e.setKeyListener(null); // Make it read-only but selectable
+
+        new AlertDialog.Builder(getActivity())
+                .setTitle(R.string.prof_export)
+                .setView(e)
+                .setPositiveButton(android.R.string.ok, null)
                 .create().show();
     }
 

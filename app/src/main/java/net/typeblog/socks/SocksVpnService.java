@@ -68,6 +68,12 @@ public class SocksVpnService extends VpnService {
         final String[] appList = intent.getStringArrayExtra(INTENT_APP_LIST);
         final boolean ipv6 = intent.getBooleanExtra(INTENT_IPV6_PROXY, false);
         final String udpgw = intent.getStringExtra(INTENT_UDP_GW);
+        final String obfs = intent.getStringExtra(INTENT_OBFS_KEY);
+        final String up = intent.getStringExtra(INTENT_UP_LIMIT);
+        final String down = intent.getStringExtra(INTENT_DOWN_LIMIT);
+        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 262144);
+        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 4194304);
+        final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 4);
 
         // Notifications on Oreo and above need a channel
         Notification.Builder builder;
@@ -106,7 +112,8 @@ public class SocksVpnService extends VpnService {
             Log.d(TAG, "fd: " + mInterface.getFd());
 
         if (mInterface != null)
-            start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw);
+            start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
+                    obfs, up, down, recvWinConn, recvWin, coreCount);
 
         return START_STICKY;
     }
@@ -134,6 +141,10 @@ public class SocksVpnService extends VpnService {
 
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
+
+        // Kill libuz.so and libload.so
+        Utility.exec("pkill -9 -f libuz.so");
+        Utility.exec("pkill -9 -f libload.so");
 
         try {
             System.jniclose(mInterface.getFd());
@@ -210,28 +221,67 @@ public class SocksVpnService extends VpnService {
         mInterface = b.establish();
     }
 
-    private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw) {
+    private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
+                       String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount) {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, dns, dnsPort);
 
         Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
 
+        // Start libuz.so instances
+        StringBuilder tunnels = new StringBuilder();
+        String serverPorts = "6000-7750,7751-9500,9501-11225,11251-13000,13001-14750,14751-16500,16501-18250,18251-19999";
+        for (int i = 0; i < coreCount; i++) {
+            int listenPort = 1080 + i;
+            String jsonConfig = String.format(Locale.US,
+                    "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
+                    server, serverPorts, obfs, user, listenPort);
+
+            if (!"0".equals(up)) {
+                jsonConfig += String.format(Locale.US, ",\"up\":\"%s\"", up);
+            }
+            if (!"0".equals(down)) {
+                jsonConfig += String.format(Locale.US, ",\"down\":\"%s\"", down);
+            }
+
+            jsonConfig += String.format(Locale.US, ",\"recvwindowconn\":%d,\"recvwindow\":%d}",
+                    recvWinConn, recvWin);
+
+            String[] uzCmd = {
+                    getApplicationInfo().nativeLibraryDir + "/libuz.so",
+                    "-s", obfs,
+                    "--config", jsonConfig
+            };
+
+            new Thread(() -> Utility.exec(uzCmd)).start();
+            tunnels.append("127.0.0.1:").append(listenPort).append(" ");
+        }
+
+        // Start libload.so
+        int loadPort = 7777;
+        String[] tunnelList = tunnels.toString().trim().split(" ");
+        String[] loadCmd = new String[6 + tunnelList.length];
+        loadCmd[0] = getApplicationInfo().nativeLibraryDir + "/libload.so";
+        loadCmd[1] = "-lhost";
+        loadCmd[2] = "127.0.0.1";
+        loadCmd[3] = "-lport";
+        loadCmd[4] = String.valueOf(loadPort);
+        loadCmd[5] = "-tunnel";
+        System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
+
+        new Thread(() -> Utility.exec(loadCmd)).start();
+
         String command = String.format(Locale.US,
                 "%s/libtun2socks.so --netif-ipaddr 26.26.26.2"
                         + " --netif-netmask 255.255.255.0"
-                        + " --socks-server-addr %s:%d"
+                        + " --socks-server-addr 127.0.0.1:%d"
                         + " --tunfd %d"
                         + " --tunmtu 1500"
                         + " --loglevel 3"
                         + " --pid %s/tun2socks.pid"
                         + " --sock %s/sock_path"
-                , getApplicationInfo().nativeLibraryDir, server, port, fd, getFilesDir(), getApplicationInfo().dataDir);
-
-        if (user != null) {
-            command += " --username " + user;
-            command += " --password " + passwd;
-        }
+                , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
 
         if (ipv6) {
             command += " --netif-ip6addr fdfe:dcba:9876::2";

@@ -28,6 +28,16 @@ public class Utility {
         }
     }
 
+    public static int exec(String[] cmd) {
+        try {
+            Process p = Runtime.getRuntime().exec(cmd);
+
+            return p.waitFor();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
     public static void killPidFile(String f) {
         File file = new File(f);
 
@@ -120,7 +130,13 @@ public class Utility {
                 .putExtra(INTENT_DNS, profile.getDns())
                 .putExtra(INTENT_DNS_PORT, profile.getDnsPort())
                 .putExtra(INTENT_PER_APP, profile.isPerApp())
-                .putExtra(INTENT_IPV6_PROXY, profile.hasIPv6());
+                .putExtra(INTENT_IPV6_PROXY, profile.hasIPv6())
+                .putExtra(INTENT_OBFS_KEY, profile.getObfsKey())
+                .putExtra(INTENT_UP_LIMIT, profile.getUpLimit())
+                .putExtra(INTENT_DOWN_LIMIT, profile.getDownLimit())
+                .putExtra(INTENT_RECV_WIN_CONN, profile.getRecvWinConn())
+                .putExtra(INTENT_RECV_WIN, profile.getRecvWin())
+                .putExtra(INTENT_CORE_COUNT, profile.getCoreCount());
 
         if (profile.isUserPw()) {
             i.putExtra(INTENT_USERNAME, profile.getUsername())

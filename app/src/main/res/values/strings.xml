@@ -15,6 +15,14 @@
     <string name="udp_proxy_sum">Forward UDP packets to badvpn-udpgw via SOCKS5. This needs badvpn-udpgw running on the remote server (normally listening on 127.0.0.1) to work.</string>
     <string name="udp_gw">UDP Gateway (Remote)</string>
 
+    <string name="performance">Multi-Tunnel Performance</string>
+    <string name="obfs_key">OBFS Key</string>
+    <string name="up_limit">Upload Limit (0 to disable)</string>
+    <string name="down_limit">Download Limit (0 to disable)</string>
+    <string name="recv_win_conn">Recv Window Connection</string>
+    <string name="recv_win">Recv Window</string>
+    <string name="core_count">Core Count (1-10)</string>
+
     <string name="authentication">Authentication</string>
     <string name="auth_userpw">Username &amp; Password Authentication</string>
     <string name="auth_username">Username</string>
@@ -35,6 +43,8 @@
 
     <string name="prof_add">Add Profile</string>
     <string name="prof_del">Delete Profile</string>
+    <string name="prof_import">Import Profile</string>
+    <string name="prof_export">Export Profile</string>
     <string name="prof_del_confirm">Delete profile %s?</string>
     <string name="switch_main">Switch on / off the proxy</string>
 

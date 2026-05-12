@@ -38,6 +38,44 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        android:title="@string/performance">
+
+        <EditTextPreference
+            android:key="obfs_key"
+            android:title="@string/obfs_key"
+            android:singleLine="true"/>
+
+        <EditTextPreference
+            android:key="up_limit"
+            android:title="@string/up_limit"
+            android:singleLine="true"/>
+
+        <EditTextPreference
+            android:key="down_limit"
+            android:title="@string/down_limit"
+            android:singleLine="true"/>
+
+        <EditTextPreference
+            android:key="recv_win_conn"
+            android:title="@string/recv_win_conn"
+            android:inputType="number"
+            android:singleLine="true"/>
+
+        <EditTextPreference
+            android:key="recv_win"
+            android:title="@string/recv_win"
+            android:inputType="number"
+            android:singleLine="true"/>
+
+        <EditTextPreference
+            android:key="core_count"
+            android:title="@string/core_count"
+            android:inputType="number"
+            android:singleLine="true"/>
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:title="@string/authentication">
 
         <CheckBoxPreference
