@@ -328,7 +328,7 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd)).start();
+            new Thread(() -> Utility.exec(uzCmd, line -> log("libuz: " + line))).start();
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 

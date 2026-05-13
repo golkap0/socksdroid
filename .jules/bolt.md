@@ -40,3 +40,13 @@ Pembelajaran:
 Tindakan:
 - Gunakan atribut tema untuk background dan warna teks pada komponen UI baru.
 - Pastikan DrawerLayout menggunakan background yang konsisten dengan konten utama.
+
+## 2025-05-15 - [Pola Capture Log Native Binary]
+Pembelajaran:
+1. Log dari binary native yang dijalankan via Runtime.exec tidak otomatis masuk ke logcat atau UI Android. Log tersebut dialirkan ke InputStream (stdout) dan ErrorStream (stderr) milik objek Process.
+2. Untuk menampilkan log native secara real-time di UI, kita harus membuat thread pembaca khusus untuk setiap stream tersebut dan meneruskannya ke listener yang terhubung ke UI.
+3. Mengabaikan penutupan stream pada Process pembaca log dapat menyebabkan kebocoran file descriptor yang parah.
+
+Tindakan:
+- Implementasikan OnLogListener pada Utility.exec untuk menangkap output stdout/stderr.
+- Gunakan thread terpisah untuk membaca stream agar tidak memblokir eksekusi utama binary.

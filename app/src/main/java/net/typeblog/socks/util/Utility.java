@@ -4,9 +4,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
@@ -18,13 +20,46 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
 
+    public interface OnLogListener {
+        void onLog(String line);
+    }
+
     public static int exec(String cmd) {
+        return exec(cmd, null);
+    }
+
+    public static int exec(String cmd, OnLogListener listener) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            if (listener != null) {
+                new Thread(() -> {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            listener.onLog(line);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+
+                new Thread(() -> {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getErrorStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            listener.onLog(line);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+            }
             int ret = p.waitFor();
-            p.getInputStream().close();
+            if (listener == null) {
+                p.getInputStream().close();
+                p.getErrorStream().close();
+            }
             p.getOutputStream().close();
-            p.getErrorStream().close();
             return ret;
         } catch (Exception e) {
             return -1;
@@ -32,12 +67,41 @@ public class Utility {
     }
 
     public static int exec(String[] cmd) {
+        return exec(cmd, null);
+    }
+
+    public static int exec(String[] cmd, OnLogListener listener) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            if (listener != null) {
+                new Thread(() -> {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            listener.onLog(line);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+
+                new Thread(() -> {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getErrorStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            listener.onLog(line);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+            }
             int ret = p.waitFor();
-            p.getInputStream().close();
+            if (listener == null) {
+                p.getInputStream().close();
+                p.getErrorStream().close();
+            }
             p.getOutputStream().close();
-            p.getErrorStream().close();
             return ret;
         } catch (Exception e) {
             return -1;
