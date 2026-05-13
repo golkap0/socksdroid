@@ -31,3 +31,12 @@ Tindakan:
 - Selalu sediakan AIDL interface yang mendukung polling log untuk fitur diagnostik.
 - Gunakan DrawerLayout untuk menampung fitur sekunder (log, settings tambahan) agar UI utama tetap bersih.
 - Pastikan ikon hamburger (ic_menu) tersedia untuk memudahkan akses drawer bagi user.
+
+## 2025-05-15 - [Perbaikan UI Drawer & Kontras Teks]
+Pembelajaran:
+1. Penggunaan warna hardcoded (seperti #FFFFFF) pada layout dapat merusak konsistensi UI jika aplikasi menggunakan tema sistem (Material/Dark). Selalu gunakan atribut tema seperti ?android:attr/windowBackground.
+2. Teks yang tidak muncul pada drawer seringkali disebabkan oleh warna teks default yang sama dengan background (misal putih di atas putih). Menggunakan ?android:attr/textColorPrimary menjamin teks tetap terbaca sesuai tema yang aktif.
+
+Tindakan:
+- Gunakan atribut tema untuk background dan warna teks pada komponen UI baru.
+- Pastikan DrawerLayout menggunakan background yang konsisten dengan konten utama.
