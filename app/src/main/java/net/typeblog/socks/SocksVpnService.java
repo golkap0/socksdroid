@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
 import android.util.Log;
 
+import net.typeblog.socks.util.BufferPool;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
@@ -21,6 +22,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Objects;
@@ -440,7 +442,12 @@ public class SocksVpnService extends VpnService {
                 serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
                 while (!isInterrupted()) {
                     Socket client = serverSocket.accept();
-                    client.setSoTimeout(SOCKET_TIMEOUT_MS);
+                    try {
+                        client.setTcpNoDelay(true);
+                        client.setSendBufferSize(128 * 1024);
+                        client.setReceiveBufferSize(128 * 1024);
+                        client.setSoTimeout(SOCKET_TIMEOUT_MS);
+                    } catch (SocketException ignored) {}
                     executor.execute(() -> handleClient(client));
                 }
             } catch (IOException e) {
@@ -469,7 +476,13 @@ public class SocksVpnService extends VpnService {
             boolean handoffSuccessful = false;
             try {
                 proxy = new Socket("127.0.0.1", proxyPort);
-                proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
+                try {
+                    proxy.setTcpNoDelay(true);
+                    proxy.setSendBufferSize(128 * 1024);
+                    proxy.setReceiveBufferSize(128 * 1024);
+                    proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
+                } catch (SocketException ignored) {}
+
                 InputStream in = proxy.getInputStream();
                 OutputStream out = proxy.getOutputStream();
 
@@ -534,16 +547,17 @@ public class SocksVpnService extends VpnService {
         }
 
         private void pipe(Socket s1, Socket s2) {
+            byte[] buffer = BufferPool.get();
             try {
                 InputStream is = s1.getInputStream();
                 OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
                 }
             } catch (IOException ignored) {
             } finally {
+                BufferPool.release(buffer);
                 try {
                     s1.close();
                 } catch (IOException ignored) {
