@@ -25,6 +25,7 @@ import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.Switch;
 import android.widget.Toast;
+import androidx.drawerlayout.widget.DrawerLayout;
 
 import net.typeblog.socks.util.Profile;
 import net.typeblog.socks.util.ProfileManager;
@@ -149,6 +150,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             return true;
         } else if (id == R.id.prof_export) {
             exportProfile();
+            return true;
+        } else if (id == R.id.drawer_open) {
+            DrawerLayout drawer = getActivity().findViewById(R.id.drawer_layout);
+            if (drawer != null) {
+                drawer.openDrawer(android.view.Gravity.START);
+            }
             return true;
         } else {
             return super.onOptionsItemSelected(item);

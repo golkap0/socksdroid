@@ -28,4 +28,5 @@ android {
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation 'androidx.drawerlayout:drawerlayout:1.1.1'
 }

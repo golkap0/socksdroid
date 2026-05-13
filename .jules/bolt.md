@@ -20,3 +20,14 @@ Tindakan:
 - Selalu gunakan CachedThreadPool untuk DNS forwarder di dalam VpnService.
 - Pastikan fallback DNS port adalah 53 (standar).
 - Implementasikan pengecekan ip.length untuk menentukan ATYP (0x01 vs 0x04) pada request SOCKS5.
+
+## 2025-05-15 - [Implementasi Navigation Drawer & Log Viewer]
+Pembelajaran:
+1. Penambahan Navigation Drawer di aplikasi berbasis Fragment lawas membutuhkan perubahan layout utama (activity_main.xml) untuk menyertakan DrawerLayout sebagai root.
+2. Komunikasi data real-time dari Service ke Activity untuk fitur log viewer paling efisien dilakukan via AIDL method calls yang dipanggil secara berkala (polling) menggunakan Handler.
+3. Mendukung AndroidX pada proyek lama membutuhkan konfigurasi android.useAndroidX=true di gradle.properties agar library seperti DrawerLayout dapat digunakan.
+
+Tindakan:
+- Selalu sediakan AIDL interface yang mendukung polling log untuk fitur diagnostik.
+- Gunakan DrawerLayout untuk menampung fitur sekunder (log, settings tambahan) agar UI utama tetap bersih.
+- Pastikan ikon hamburger (ic_menu) tersedia untuk memudahkan akses drawer bagi user.

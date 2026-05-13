@@ -42,6 +42,30 @@ public class SocksVpnService extends VpnService {
         public void stop() {
             stopMe();
         }
+
+        @Override
+        public String getLogs() {
+            synchronized (mLogBuffer) {
+                return mLogBuffer.toString();
+            }
+        }
+
+        @Override
+        public void clearLogs() {
+            synchronized (mLogBuffer) {
+                mLogBuffer.setLength(0);
+            }
+        }
+
+        @Override
+        public void setLoggingEnabled(boolean enabled) {
+            mLoggingEnabled = enabled;
+        }
+
+        @Override
+        public boolean isLoggingEnabled() {
+            return mLoggingEnabled;
+        }
     }
 
     private static final String TAG = SocksVpnService.class.getSimpleName();
@@ -51,6 +75,8 @@ public class SocksVpnService extends VpnService {
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
+    private final StringBuilder mLogBuffer = new StringBuilder();
+    private volatile boolean mLoggingEnabled = true;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -375,7 +401,7 @@ public class SocksVpnService extends VpnService {
         stopMe();
     }
 
-    private static class SocksForwarder extends Thread {
+    private class SocksForwarder extends Thread {
         private final int listenPort;
         private final String targetHost;
         private final int targetPort;
@@ -491,6 +517,17 @@ public class SocksVpnService extends VpnService {
             }
         }
 
+        private void log(String msg) {
+            if (mLoggingEnabled) {
+                synchronized (mLogBuffer) {
+                    mLogBuffer.append(msg).append("\n");
+                    if (mLogBuffer.length() > 10000) {
+                        mLogBuffer.delete(0, 2000);
+                    }
+                }
+            }
+        }
+
         private void pipe(Socket s1, Socket s2) {
             try {
                 InputStream is = s1.getInputStream();
@@ -499,6 +536,7 @@ public class SocksVpnService extends VpnService {
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
+                    log(String.format(Locale.US, "libuz: forward %d bytes", n));
                 }
             } catch (IOException ignored) {}
             finally {
