@@ -43,6 +43,29 @@ public class SocksVpnService extends VpnService {
             stopMe();
         }
 
+        @Override
+        public String getLogs() {
+            synchronized (mLogBuffer) {
+                return mLogBuffer.toString();
+            }
+        }
+
+        @Override
+        public void clearLogs() {
+            synchronized (mLogBuffer) {
+                mLogBuffer.setLength(0);
+            }
+        }
+
+        @Override
+        public void setLoggingEnabled(boolean enabled) {
+            mLoggingEnabled = enabled;
+        }
+
+        @Override
+        public boolean isLoggingEnabled() {
+            return mLoggingEnabled;
+        }
     }
 
     private static final String TAG = SocksVpnService.class.getSimpleName();
@@ -52,6 +75,19 @@ public class SocksVpnService extends VpnService {
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
+    private final StringBuilder mLogBuffer = new StringBuilder();
+    private volatile boolean mLoggingEnabled = true;
+
+    private void log(String msg) {
+        if (mLoggingEnabled) {
+            synchronized (mLogBuffer) {
+                mLogBuffer.append(msg).append("\n");
+                if (mLogBuffer.length() > 10000) {
+                    mLogBuffer.delete(0, 2000);
+                }
+            }
+        }
+    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -303,7 +339,7 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd)).start();
+            new Thread(() -> Utility.exec(uzCmd, line -> log("libuz: " + line))).start();
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
