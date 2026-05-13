@@ -78,6 +78,17 @@ public class SocksVpnService extends VpnService {
     private final StringBuilder mLogBuffer = new StringBuilder();
     private volatile boolean mLoggingEnabled = true;
 
+    private void log(String msg) {
+        if (mLoggingEnabled) {
+            synchronized (mLogBuffer) {
+                mLogBuffer.append(msg).append("\n");
+                if (mLogBuffer.length() > 10000) {
+                    mLogBuffer.delete(0, 2000);
+                }
+            }
+        }
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
@@ -100,7 +111,7 @@ public class SocksVpnService extends VpnService {
         final String passwd = intent.getStringExtra(INTENT_PASSWORD);
         final String route = intent.getStringExtra(INTENT_ROUTE);
         final String dns = intent.getStringExtra(INTENT_DNS) != null ? intent.getStringExtra(INTENT_DNS) : "9.9.9.9";
-        final int dnsPort = intent.getIntExtra(INTENT_DNS_PORT, 9953);
+        final int dnsPort = intent.getIntExtra(INTENT_DNS_PORT, 53);
         final boolean perApp = intent.getBooleanExtra(INTENT_PER_APP, false);
         final boolean appBypass = intent.getBooleanExtra(INTENT_APP_BYPASS, false);
         final String[] appList = intent.getStringArrayExtra(INTENT_APP_LIST);
@@ -408,9 +419,7 @@ public class SocksVpnService extends VpnService {
         private final int proxyPort;
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors())
-        );
+        private final ExecutorService executor = Executors.newCachedThreadPool();
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -466,12 +475,13 @@ public class SocksVpnService extends VpnService {
                 }
 
                 // Connect
-                byte[] ip = InetAddress.getByName(targetHost).getAddress();
+                InetAddress addr = InetAddress.getByName(targetHost);
+                byte[] ip = addr.getAddress();
                 byte[] request = new byte[6 + ip.length];
                 request[0] = 0x05;
                 request[1] = 0x01; // CONNECT
                 request[2] = 0x00;
-                request[3] = 0x01; // IPv4
+                request[3] = (byte) (ip.length == 4 ? 0x01 : 0x04);
                 java.lang.System.arraycopy(ip, 0, request, 4, ip.length);
                 request[4 + ip.length] = (byte) (targetPort >> 8);
                 request[5 + ip.length] = (byte) (targetPort & 0xFF);
@@ -513,17 +523,6 @@ public class SocksVpnService extends VpnService {
                 if (!handoffSuccessful) {
                     try { client.close(); } catch (IOException ignored) {}
                     if (proxy != null) try { proxy.close(); } catch (IOException ignored) {}
-                }
-            }
-        }
-
-        private void log(String msg) {
-            if (mLoggingEnabled) {
-                synchronized (mLogBuffer) {
-                    mLogBuffer.append(msg).append("\n");
-                    if (mLogBuffer.length() > 10000) {
-                        mLogBuffer.delete(0, 2000);
-                    }
                 }
             }
         }

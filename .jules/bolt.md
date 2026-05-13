@@ -50,3 +50,12 @@ Pembelajaran:
 Tindakan:
 - Implementasikan OnLogListener pada Utility.exec untuk menangkap output stdout/stderr.
 - Gunakan thread terpisah untuk membaca stream agar tidak memblokir eksekusi utama binary.
+
+## 2025-05-15 - [Pola Fix CI Compilation Error]
+Pembelajaran:
+1. Saat memindahkan method ke scope yang lebih luas (dari inner class ke outer class), pastikan semua referensi lama di-update. Kesalahan 'cannot find symbol' sering terjadi karena method dipanggil di scope yang salah atau belum didefinisikan saat class dikompilasi.
+2. Lambda expression di Java menangkap scope sekitarnya; jika method dipanggil di dalam lambda yang dieksekusi di thread terpisah, method tersebut harus thread-safe (misal menggunakan synchronized).
+
+Tindakan:
+- Pastikan visibilitas method (private/protected/public) sesuai dengan scope pemanggilnya.
+- Verifikasi kompilasi lokal atau cek ulang struktur class sebelum melakukan push jika melakukan refactoring besar.
