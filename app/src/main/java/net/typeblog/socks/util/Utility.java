@@ -12,13 +12,24 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import net.typeblog.socks.R;
 import net.typeblog.socks.SocksVpnService;
 import static net.typeblog.socks.util.Constants.*;
+import static net.typeblog.socks.BuildConfig.DEBUG;
 
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
+
+    private static final ExecutorService logExecutor = new ThreadPoolExecutor(
+            4, 20,
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<Runnable>()
+    );
 
     public interface OnLogListener {
         void onLog(String line);
@@ -32,7 +43,7 @@ public class Utility {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
-                new Thread(() -> {
+                logExecutor.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -41,9 +52,9 @@ public class Utility {
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }).start();
+                });
 
-                new Thread(() -> {
+                logExecutor.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -52,7 +63,7 @@ public class Utility {
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }).start();
+                });
             }
             int ret = p.waitFor();
             if (listener == null) {
@@ -74,7 +85,7 @@ public class Utility {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
-                new Thread(() -> {
+                logExecutor.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -83,9 +94,9 @@ public class Utility {
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }).start();
+                });
 
-                new Thread(() -> {
+                logExecutor.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -94,7 +105,7 @@ public class Utility {
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }).start();
+                });
             }
             int ret = p.waitFor();
             if (listener == null) {
@@ -136,8 +147,9 @@ public class Utility {
                 // If standard kill failed, try kill -9
                 Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
             }
-            if(!file.delete())
-                Log.w(TAG, "failed to delete pidfile");
+            if (!file.delete()) {
+                if (DEBUG) Log.w(TAG, "failed to delete pidfile");
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -164,8 +176,9 @@ public class Utility {
         File f = new File(context.getFilesDir() + "/pdnsd.conf");
 
         if (f.exists()) {
-            if(!f.delete())
-                Log.w(TAG, "failed to delete pdnsd.conf");
+            if (!f.delete()) {
+                if (DEBUG) Log.w(TAG, "failed to delete pdnsd.conf");
+            }
         }
 
         try {
@@ -181,8 +194,9 @@ public class Utility {
 
         if (!cache.exists()) {
             try {
-                if(!cache.createNewFile())
-                    Log.w(TAG, "failed to create pdnsd.cache");
+                if (!cache.createNewFile()) {
+                    if (DEBUG) Log.w(TAG, "failed to create pdnsd.cache");
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }

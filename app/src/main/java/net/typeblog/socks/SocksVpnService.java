@@ -25,7 +25,8 @@ import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -419,7 +420,12 @@ public class SocksVpnService extends VpnService {
         private final int proxyPort;
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = Executors.newCachedThreadPool();
+        private final ExecutorService executor = new ThreadPoolExecutor(
+                4, // Core threads
+                100, // Max threads
+                30L, TimeUnit.SECONDS, // Keep-alive
+                new SynchronousQueue<Runnable>()
+        );
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -536,10 +542,16 @@ public class SocksVpnService extends VpnService {
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
                 }
-            } catch (IOException ignored) {}
-            finally {
-                try { s1.close(); } catch (IOException ignored) {}
-                try { s2.close(); } catch (IOException ignored) {}
+            } catch (IOException ignored) {
+            } finally {
+                try {
+                    s1.close();
+                } catch (IOException ignored) {
+                }
+                try {
+                    s2.close();
+                } catch (IOException ignored) {
+                }
             }
         }
 

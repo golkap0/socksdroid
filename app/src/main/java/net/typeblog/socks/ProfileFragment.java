@@ -309,7 +309,11 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        mSwitch = null;
+        if (mSwitch != null) {
+            mSwitch.setOnCheckedChangeListener(null);
+            mSwitch.removeCallbacks(mStateRunnable);
+            mSwitch = null;
+        }
         mPrefProfile = null;
         mPrefRoutes = null;
         mPrefServer = null;
