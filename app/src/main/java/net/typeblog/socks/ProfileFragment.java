@@ -49,7 +49,23 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private long mLastBindAttemptMs = 0L;
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new VpnServiceConnection(this);
-    private final Runnable mStateRunnable = new StateRunnable(this);
+
+    private final IVpnServiceCallback mCallback = new IVpnServiceCallback.Stub() {
+        @Override
+        public void onStateChanged(boolean running) {
+            if (mSwitch != null) {
+                mSwitch.post(() -> {
+                    mRunning = running;
+                    updateState();
+                });
+            }
+        }
+
+        @Override
+        public void onLogAdded(String line) {
+            // Handled in MainActivity
+        }
+    };
 
     private static class VpnServiceConnection implements ServiceConnection {
         private final WeakReference<ProfileFragment> mFragment;
@@ -68,6 +84,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             fragment.mBinder = IVpnService.Stub.asInterface(binder);
 
             try {
+                fragment.mBinder.registerCallback(fragment.mCallback);
                 fragment.mRunning = fragment.mBinder.isRunning();
             } catch (Exception e) {
                 // Ignore
@@ -89,22 +106,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         }
     }
 
-    private static class StateRunnable implements Runnable {
-        private final WeakReference<ProfileFragment> mFragment;
-
-        StateRunnable(ProfileFragment fragment) {
-            mFragment = new WeakReference<>(fragment);
-        }
-
-        @Override
-        public void run() {
-            ProfileFragment fragment = mFragment.get();
-            if (fragment == null || fragment.mSwitch == null) return;
-
-            fragment.updateState();
-            fragment.mSwitch.postDelayed(this, 1000);
-        }
-    }
     private IVpnService mBinder;
 
     private ListPreference mPrefProfile, mPrefRoutes;
@@ -132,7 +133,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         MenuItem s = menu.findItem(R.id.switch_main);
         mSwitch = s.getActionView().findViewById(R.id.switch_action_button);
         mSwitch.setOnCheckedChangeListener(this);
-        mSwitch.postDelayed(mStateRunnable, 1000);
         checkState();
     }
 
@@ -293,26 +293,16 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onResume() {
         super.onResume();
-        if (mSwitch != null) {
-            mSwitch.postDelayed(mStateRunnable, 1000);
-        }
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        if (mSwitch != null) {
-            mSwitch.removeCallbacks(mStateRunnable);
-        }
     }
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        if (mSwitch != null) {
-            mSwitch.removeCallbacks(mStateRunnable);
-        }
-
         mSwitch = null;
     }
 
@@ -320,7 +310,16 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     public void onDestroy() {
         super.onDestroy();
         if (mBound) {
-            getActivity().unbindService(mConnection);
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    // Ignore
+                }
+            }
+            if (getActivity() != null) {
+                getActivity().unbindService(mConnection);
+            }
         }
 
         if (mPrefProfile != null) mPrefProfile.setOnPreferenceChangeListener(null);
@@ -717,7 +716,9 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mBinder = null;
 
         if (mBound) {
-            getActivity().unbindService(mConnection);
+            if (getActivity() != null) {
+                getActivity().unbindService(mConnection);
+            }
         }
         mBound = false;
         mBinding = false;

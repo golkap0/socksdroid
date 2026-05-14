@@ -23,11 +23,32 @@ public class MainActivity extends Activity {
     private boolean mBound = false;
     private final Handler mHandler = new Handler();
 
+    private final IVpnServiceCallback mCallback = new IVpnServiceCallback.Stub() {
+        @Override
+        public void onStateChanged(boolean running) {
+            // Handled in ProfileFragment
+        }
+
+        @Override
+        public void onLogAdded(String line) {
+            mHandler.post(() -> mTvLogs.append(line + "\n"));
+        }
+    };
+
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             mBinder = IVpnService.Stub.asInterface(service);
             mBound = true;
+            try {
+                mBinder.registerCallback(mCallback);
+                String logs = mBinder.getLogs();
+                if (logs != null) {
+                    mTvLogs.setText(logs);
+                }
+            } catch (Exception e) {
+                // Ignore
+            }
             updateLogControls();
         }
 
@@ -35,23 +56,6 @@ public class MainActivity extends Activity {
         public void onServiceDisconnected(ComponentName name) {
             mBinder = null;
             mBound = false;
-        }
-    };
-
-    private final Runnable mLogUpdater = new Runnable() {
-        @Override
-        public void run() {
-            if (mBound && mBinder != null) {
-                try {
-                    String logs = mBinder.getLogs();
-                    if (logs != null) {
-                        mTvLogs.setText(logs);
-                    }
-                } catch (Exception e) {
-                    // Ignore
-                }
-            }
-            mHandler.postDelayed(this, 2000);
         }
     };
 
@@ -94,13 +98,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        mHandler.post(mLogUpdater);
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        mHandler.removeCallbacks(mLogUpdater);
     }
 
     private void updateLogControls() {
@@ -117,6 +119,13 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         if (mBound) {
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    // Ignore
+                }
+            }
             unbindService(mConnection);
             mBound = false;
         }

@@ -11,12 +11,19 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import net.typeblog.socks.R;
 import net.typeblog.socks.SocksVpnService;
 import static net.typeblog.socks.util.Constants.*;
 
 public class Utility {
+
+    private static final ThreadPoolExecutor LOG_EXECUTOR = new ThreadPoolExecutor(4, 20,
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>());
 
     public interface OnLogListener {
         void onLog(String line);
@@ -32,7 +39,7 @@ public class Utility {
             p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
                 final Process fp = p;
-                new Thread(() -> {
+                LOG_EXECUTOR.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -41,9 +48,9 @@ public class Utility {
                     } catch (Exception e) {
                         // Ignore
                     }
-                }).start();
+                });
 
-                new Thread(() -> {
+                LOG_EXECUTOR.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -52,7 +59,7 @@ public class Utility {
                     } catch (Exception e) {
                         // Ignore
                     }
-                }).start();
+                });
             }
             return p.waitFor();
         } catch (Exception e) {
@@ -78,7 +85,7 @@ public class Utility {
             p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
                 final Process fp = p;
-                new Thread(() -> {
+                LOG_EXECUTOR.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -87,9 +94,9 @@ public class Utility {
                     } catch (Exception e) {
                         // Ignore
                     }
-                }).start();
+                });
 
-                new Thread(() -> {
+                LOG_EXECUTOR.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -98,7 +105,7 @@ public class Utility {
                     } catch (Exception e) {
                         // Ignore
                     }
-                }).start();
+                });
             }
             return p.waitFor();
         } catch (Exception e) {
