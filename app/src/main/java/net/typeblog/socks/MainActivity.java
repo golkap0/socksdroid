@@ -14,6 +14,8 @@ import android.widget.Switch;
 import android.widget.TextView;
 import androidx.drawerlayout.widget.DrawerLayout;
 
+import java.lang.ref.WeakReference;
+
 public class MainActivity extends Activity {
     private DrawerLayout mDrawerLayout;
     private TextView mTvLogs;
@@ -21,9 +23,17 @@ public class MainActivity extends Activity {
     private Switch mSwitchLog;
     private IVpnService mBinder;
     private boolean mBound = false;
+    private boolean mBinding = false;
     private final Handler mHandler = new Handler();
+    private final IVpnServiceCallback mCallback = new VpnServiceCallbackStub(this);
 
-    private final IVpnServiceCallback mCallback = new IVpnServiceCallback.Stub() {
+    private static class VpnServiceCallbackStub extends IVpnServiceCallback.Stub {
+        private final WeakReference<MainActivity> mActivity;
+
+        VpnServiceCallbackStub(MainActivity activity) {
+            mActivity = new WeakReference<>(activity);
+        }
+
         @Override
         public void onStateChanged(boolean running) {
             // Handled in ProfileFragment
@@ -31,9 +41,16 @@ public class MainActivity extends Activity {
 
         @Override
         public void onLogAdded(String line) {
-            mHandler.post(() -> mTvLogs.append(line + "\n"));
+            MainActivity activity = mActivity.get();
+            if (activity != null) {
+                activity.mHandler.post(() -> {
+                    if (activity.mTvLogs != null) {
+                        activity.mTvLogs.append(line + "\n");
+                    }
+                });
+            }
         }
-    };
+    }
 
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
@@ -92,18 +109,9 @@ public class MainActivity extends Activity {
 
         getFragmentManager().beginTransaction().replace(R.id.content_frame, new ProfileFragment()).commit();
 
-        bindService(new Intent(this, SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
+        mBinding = bindService(new Intent(this, SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
     }
 
-    @Override
-    protected void onStart() {
-        super.onStart();
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-    }
 
     private void updateLogControls() {
         if (mBound && mBinder != null) {
@@ -126,8 +134,12 @@ public class MainActivity extends Activity {
                     // Ignore
                 }
             }
-            unbindService(mConnection);
             mBound = false;
+        }
+
+        if (mBinding) {
+            unbindService(mConnection);
+            mBinding = false;
         }
     }
 }

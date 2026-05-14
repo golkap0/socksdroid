@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -90,6 +91,7 @@ public class SocksVpnService extends VpnService {
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
+    private ScheduledExecutorService mRetryExecutor;
     private final StringBuilder mLogBuffer = new StringBuilder();
     private volatile boolean mLoggingEnabled = true;
     private final RemoteCallbackList<IVpnServiceCallback> mCallbacks = new RemoteCallbackList<>();
@@ -242,11 +244,19 @@ public class SocksVpnService extends VpnService {
             mForwarder = null;
         }
 
+        if (mRetryExecutor != null) {
+            mRetryExecutor.shutdownNow();
+            mRetryExecutor = null;
+        }
+
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // Kill all native processes in a single execution to reduce overhead
-        Utility.exec("pkill -9 -f 'libuz.so|libload.so|libpdnsd.so|libtun2socks.so'");
+        // Kill native processes
+        Utility.exec("pkill -9 -f libuz.so");
+        Utility.exec("pkill -9 -f libload.so");
+        Utility.exec("pkill -9 -f libpdnsd.so");
+        Utility.exec("pkill -9 -f libtun2socks.so");
 
         if (mInterface != null) {
             try {
@@ -393,6 +403,7 @@ public class SocksVpnService extends VpnService {
         CountDownLatch loadLatch = new CountDownLatch(1);
         new Thread(() -> {
             Utility.exec(loadCmd, line -> {
+                log("libload: " + line);
                 if (line.contains("Listening")) {
                     loadLatch.countDown();
                 }
@@ -432,25 +443,26 @@ public class SocksVpnService extends VpnService {
             return;
         }
 
-        // Try to send the Fd through socket.
-        int i = 0;
-        while (i < 5) {
-            if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
-                updateState(true);
-                return;
+        // Try to send the Fd through socket with non-blocking retries.
+        mRetryExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        final int[] retryCount = {0};
+        final String sockPath = getApplicationInfo().dataDir + "/sock_path";
+
+        mRetryExecutor.schedule(new Runnable() {
+            @Override
+            public void run() {
+                if (System.sendfd(fd, sockPath) != -1) {
+                    updateState(true);
+                    if (mRetryExecutor != null) mRetryExecutor.shutdown();
+                } else if (retryCount[0] < 5) {
+                    retryCount[0]++;
+                    if (mRetryExecutor != null) mRetryExecutor.schedule(this, retryCount[0], TimeUnit.SECONDS);
+                } else {
+                    stopMe();
+                    if (mRetryExecutor != null) mRetryExecutor.shutdown();
+                }
             }
-
-            i++;
-
-            try {
-                Thread.sleep(1000L * i);
-            } catch (Exception e) {
-                // Ignore
-            }
-        }
-
-        // Should not get here. Must be a failure.
-        stopMe();
+        }, 0, TimeUnit.SECONDS);
     }
 
     private class SocksForwarder extends Thread {
@@ -462,7 +474,8 @@ public class SocksVpnService extends VpnService {
         private static final int SOCKET_TIMEOUT_MS = 30_000;
         private final ExecutorService executor = new ThreadPoolExecutor(4, 8,
                 60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(100));
+                new LinkedBlockingQueue<>(100),
+                new ThreadPoolExecutor.DiscardOldestPolicy());
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;

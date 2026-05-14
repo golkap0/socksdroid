@@ -49,14 +49,22 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private long mLastBindAttemptMs = 0L;
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new VpnServiceConnection(this);
+    private final IVpnServiceCallback mCallback = new VpnServiceCallbackStub(this);
 
-    private final IVpnServiceCallback mCallback = new IVpnServiceCallback.Stub() {
+    private static class VpnServiceCallbackStub extends IVpnServiceCallback.Stub {
+        private final WeakReference<ProfileFragment> mFragment;
+
+        VpnServiceCallbackStub(ProfileFragment fragment) {
+            mFragment = new WeakReference<>(fragment);
+        }
+
         @Override
         public void onStateChanged(boolean running) {
-            if (mSwitch != null) {
-                mSwitch.post(() -> {
-                    mRunning = running;
-                    updateState();
+            ProfileFragment fragment = mFragment.get();
+            if (fragment != null && fragment.mSwitch != null) {
+                fragment.mSwitch.post(() -> {
+                    fragment.mRunning = running;
+                    fragment.updateState();
                 });
             }
         }
@@ -65,7 +73,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         public void onLogAdded(String line) {
             // Handled in MainActivity
         }
-    };
+    }
 
     private static class VpnServiceConnection implements ServiceConnection {
         private final WeakReference<ProfileFragment> mFragment;
@@ -317,9 +325,10 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                     // Ignore
                 }
             }
-            if (getActivity() != null) {
-                getActivity().unbindService(mConnection);
-            }
+        }
+
+        if (mBinding && getActivity() != null) {
+            getActivity().unbindService(mConnection);
         }
 
         if (mPrefProfile != null) mPrefProfile.setOnPreferenceChangeListener(null);
@@ -715,10 +724,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
         mBinder = null;
 
-        if (mBound) {
-            if (getActivity() != null) {
-                getActivity().unbindService(mConnection);
-            }
+        if (mBinding && getActivity() != null) {
+            getActivity().unbindService(mConnection);
         }
         mBound = false;
         mBinding = false;
