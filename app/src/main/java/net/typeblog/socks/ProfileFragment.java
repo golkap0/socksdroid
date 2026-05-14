@@ -70,7 +70,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             try {
                 fragment.mRunning = fragment.mBinder.isRunning();
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
 
             if (fragment.mRunning) {
@@ -679,7 +679,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         try {
             mBinder.stop();
         } catch (Exception e) {
-            e.printStackTrace();
+            // Ignore
         }
 
         mBinder = null;

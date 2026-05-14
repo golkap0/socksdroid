@@ -48,7 +48,7 @@ public class MainActivity extends Activity {
                         mTvLogs.setText(logs);
                     }
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
             }
             mHandler.postDelayed(this, 2000);
@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
                     mBinder.clearLogs();
                     mTvLogs.setText("");
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
             }
         });
@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
                 try {
                     mBinder.setLoggingEnabled(checked);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
             }
         });
@@ -97,7 +97,7 @@ public class MainActivity extends Activity {
             try {
                 mSwitchLog.setChecked(mBinder.isLoggingEnabled());
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
         }
     }

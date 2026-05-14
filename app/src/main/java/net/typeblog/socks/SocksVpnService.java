@@ -10,7 +10,6 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
-import android.util.Log;
 
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
@@ -29,7 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
-import static net.typeblog.socks.BuildConfig.DEBUG;
 
 public class SocksVpnService extends VpnService {
     class VpnBinder extends IVpnService.Stub {
@@ -68,8 +66,6 @@ public class SocksVpnService extends VpnService {
         }
     }
 
-    private static final String TAG = SocksVpnService.class.getSimpleName();
-
     private ParcelFileDescriptor mInterface;
     private volatile boolean mRunning = false;
     private volatile boolean mStarting = false;
@@ -91,10 +87,6 @@ public class SocksVpnService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-
-        if (DEBUG) {
-            Log.d(TAG, "starting");
-        }
 
         if (intent == null) {
             return START_STICKY;
@@ -160,9 +152,6 @@ public class SocksVpnService extends VpnService {
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
         if (mInterface != null) {
-            if (DEBUG)
-                Log.d(TAG, "fd: " + mInterface.getFd());
-
             mStarting = true;
             final int fd = mInterface.getFd();
             new Thread(() -> {
@@ -218,7 +207,7 @@ public class SocksVpnService extends VpnService {
                 System.jniclose(mInterface.getFd());
                 mInterface.close();
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
             mInterface = null;
         }
@@ -254,7 +243,7 @@ public class SocksVpnService extends VpnService {
             try {
                 b.addDisallowedApplication("net.typeblog.socks");
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
         } else {
             if (apps == null) {
@@ -265,7 +254,7 @@ public class SocksVpnService extends VpnService {
                 try {
                     b.addDisallowedApplication("net.typeblog.socks");
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
 
                 for (String p : apps) {
@@ -275,7 +264,7 @@ public class SocksVpnService extends VpnService {
                     try {
                         b.addDisallowedApplication(p.trim());
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }
             } else {
@@ -287,7 +276,7 @@ public class SocksVpnService extends VpnService {
                     try {
                         b.addAllowedApplication(p.trim());
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }
             }
@@ -367,7 +356,7 @@ public class SocksVpnService extends VpnService {
                         + " --socks-server-addr 127.0.0.1:%d"
                         + " --tunfd %d"
                         + " --tunmtu 1500"
-                        + " --loglevel 3"
+                        + " --loglevel 0"
                         + " --pid %s/tun2socks.pid"
                         + " --sock %s/sock_path"
                 , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
@@ -380,10 +369,6 @@ public class SocksVpnService extends VpnService {
 
         if (udpgw != null) {
             command += " --udpgw-remote-server-addr " + udpgw;
-        }
-
-        if (DEBUG) {
-            Log.d(TAG, command);
         }
 
         if (Utility.exec(command) != 0) {
@@ -404,7 +389,7 @@ public class SocksVpnService extends VpnService {
             try {
                 Thread.sleep(1000L * i);
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
         }
 

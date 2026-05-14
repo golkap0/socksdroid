@@ -2,7 +2,6 @@ package net.typeblog.socks.util;
 
 import android.content.Context;
 import android.content.Intent;
-import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -18,7 +17,6 @@ import net.typeblog.socks.SocksVpnService;
 import static net.typeblog.socks.util.Constants.*;
 
 public class Utility {
-    private static final String TAG = Utility.class.getSimpleName();
 
     public interface OnLogListener {
         void onLog(String line);
@@ -39,7 +37,7 @@ public class Utility {
                             listener.onLog(line);
                         }
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }).start();
 
@@ -50,7 +48,7 @@ public class Utility {
                             listener.onLog(line);
                         }
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }).start();
             }
@@ -81,7 +79,7 @@ public class Utility {
                             listener.onLog(line);
                         }
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }).start();
 
@@ -92,7 +90,7 @@ public class Utility {
                             listener.onLog(line);
                         }
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }).start();
             }
@@ -136,10 +134,9 @@ public class Utility {
                 // If standard kill failed, try kill -9
                 Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
             }
-            if(!file.delete())
-                Log.w(TAG, "failed to delete pidfile");
+            file.delete();
         } catch (Exception e) {
-            e.printStackTrace();
+            // Ignore
         }
     }
 
@@ -164,8 +161,7 @@ public class Utility {
         File f = new File(context.getFilesDir() + "/pdnsd.conf");
 
         if (f.exists()) {
-            if(!f.delete())
-                Log.w(TAG, "failed to delete pdnsd.conf");
+            f.delete();
         }
 
         try {
@@ -174,17 +170,16 @@ public class Utility {
             out.flush();
             out.close();
         } catch (Exception e) {
-            e.printStackTrace();
+            // Ignore
         }
 
         File cache = new File(context.getFilesDir() + "/pdnsd.cache");
 
         if (!cache.exists()) {
             try {
-                if(!cache.createNewFile())
-                    Log.w(TAG, "failed to create pdnsd.cache");
+                cache.createNewFile();
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
         }
     }
