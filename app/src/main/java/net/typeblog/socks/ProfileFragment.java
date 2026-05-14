@@ -98,9 +98,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                 // Ignore
             }
 
-            if (fragment.mRunning) {
-                fragment.updateState();
-            }
+            fragment.updateState();
         }
 
         @Override
@@ -111,6 +109,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             fragment.mBound = false;
             fragment.mBinding = false;
             fragment.mBinder = null;
+            fragment.updateState();
         }
     }
 
@@ -672,6 +671,9 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     private void updateState() {
+        if (mSwitch == null) return;
+        mSwitch.setOnCheckedChangeListener(null);
+
         if (mBinder == null) {
             mRunning = false;
         } else {

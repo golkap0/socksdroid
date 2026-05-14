@@ -116,7 +116,17 @@ public class MainActivity extends Activity {
     private void updateLogControls() {
         if (mBound && mBinder != null) {
             try {
+                mSwitchLog.setOnCheckedChangeListener(null);
                 mSwitchLog.setChecked(mBinder.isLoggingEnabled());
+                mSwitchLog.setOnCheckedChangeListener((v, checked) -> {
+                    if (mBound && mBinder != null) {
+                        try {
+                            mBinder.setLoggingEnabled(checked);
+                        } catch (Exception e) {
+                            // Ignore
+                        }
+                    }
+                });
             } catch (Exception e) {
                 // Ignore
             }

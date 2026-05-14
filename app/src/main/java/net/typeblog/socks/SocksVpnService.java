@@ -353,8 +353,8 @@ public class SocksVpnService extends VpnService {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, "127.0.0.1", forwarderPort);
 
-        Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
-                getApplicationInfo().nativeLibraryDir, getFilesDir()));
+        Utility.exec(new String[]{"sh", "-c", String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf > /dev/null 2>&1",
+                getApplicationInfo().nativeLibraryDir, getFilesDir())});
 
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
@@ -390,54 +390,47 @@ public class SocksVpnService extends VpnService {
         // Start libload.so
         int loadPort = 7777;
         String[] tunnelList = tunnels.toString().trim().split(" ");
-        String[] loadCmd = new String[6 + tunnelList.length];
-        loadCmd[0] = getApplicationInfo().nativeLibraryDir + "/libload.so";
-        loadCmd[1] = "-lhost";
-        loadCmd[2] = "127.0.0.1";
-        loadCmd[3] = "-lport";
-        loadCmd[4] = String.valueOf(loadPort);
-        loadCmd[5] = "-tunnel";
-        java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
+        StringBuilder loadCmdBuilder = new StringBuilder();
+        loadCmdBuilder.append(getApplicationInfo().nativeLibraryDir).append("/libload.so")
+                .append(" -lhost 127.0.0.1 -lport ").append(loadPort).append(" -tunnel ");
+        for (String t : tunnelList) {
+            loadCmdBuilder.append(t).append(" ");
+        }
+        loadCmdBuilder.append("> /dev/null 2>&1");
 
-        CountDownLatch loadLatch = new CountDownLatch(1);
         new Thread(() -> {
-            Utility.exec(loadCmd, line -> {
-                if (mLoggingEnabled) log("libload: " + line);
-                if (line.contains("Listening")) {
-                    loadLatch.countDown();
-                }
-            });
-            // Also countdown if the process exits unexpectedly
-            loadLatch.countDown();
+            Utility.exec(new String[]{"sh", "-c", loadCmdBuilder.toString()});
         }).start();
 
         try {
-            // Wait for libload to start listening, but with a timeout
-            loadLatch.await(2, TimeUnit.SECONDS);
+            // Wait for libload to start listening
+            Thread.sleep(1000);
         } catch (InterruptedException ignored) {}
 
-        String command = String.format(Locale.US,
+        StringBuilder tunCmdBuilder = new StringBuilder();
+        tunCmdBuilder.append(String.format(Locale.US,
                 "%s/libtun2socks.so --netif-ipaddr 26.26.26.2"
                         + " --netif-netmask 255.255.255.0"
                         + " --socks-server-addr 127.0.0.1:%d"
                         + " --tunfd %d"
                         + " --tunmtu 1500"
-                        + " --loglevel 0"
                         + " --pid %s/tun2socks.pid"
                         + " --sock %s/sock_path"
-                , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
+                , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir));
 
         if (ipv6) {
-            command += " --netif-ip6addr fdfe:dcba:9876::2";
+            tunCmdBuilder.append(" --netif-ip6addr fdfe:dcba:9876::2");
         }
 
-        command += " --dnsgw 26.26.26.1:8091";
+        tunCmdBuilder.append(" --dnsgw 26.26.26.1:8091");
 
         if (udpgw != null) {
-            command += " --udpgw-remote-server-addr " + udpgw;
+            tunCmdBuilder.append(" --udpgw-remote-server-addr ").append(udpgw);
         }
 
-        if (Utility.exec(command) != 0) {
+        tunCmdBuilder.append(" > /dev/null 2>&1");
+
+        if (Utility.exec(new String[]{"sh", "-c", tunCmdBuilder.toString()}) != 0) {
             stopMe();
             return;
         }
