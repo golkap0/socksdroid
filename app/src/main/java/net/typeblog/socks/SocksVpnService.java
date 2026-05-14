@@ -356,7 +356,7 @@ public class SocksVpnService extends VpnService {
                         + " --socks-server-addr 127.0.0.1:%d"
                         + " --tunfd %d"
                         + " --tunmtu 1500"
-                        + " --loglevel 3"
+                        + " --loglevel 0"
                         + " --pid %s/tun2socks.pid"
                         + " --sock %s/sock_path"
                 , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
