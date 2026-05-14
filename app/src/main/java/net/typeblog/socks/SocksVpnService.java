@@ -137,6 +137,7 @@ public class SocksVpnService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
 
         if (intent == null) {
+            stopMe();
             return START_STICKY;
         }
 
@@ -199,7 +200,9 @@ public class SocksVpnService extends VpnService {
         // Create an fd.
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
-        if (mInterface != null) {
+        if (mInterface == null) {
+            stopMe();
+        } else {
             mStarting = true;
             final int fd = mInterface.getFd();
             new Thread(() -> {

@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
+import android.os.Handler;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.preference.CheckBoxPreference;
@@ -50,6 +51,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new VpnServiceConnection(this);
     private final IVpnServiceCallback mCallback = new VpnServiceCallbackStub(this);
+    private final Handler mHandler = new Handler();
+    private final Runnable mWatchdog = () -> {
+        mStarting = false;
+        mStopping = false;
+        updateState();
+    };
 
     private static class VpnServiceCallbackStub extends IVpnServiceCallback.Stub {
         private final WeakReference<ProfileFragment> mFragment;
@@ -64,6 +71,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             if (fragment != null && fragment.mSwitch != null) {
                 fragment.mSwitch.post(() -> {
                     fragment.mRunning = running;
+                    if (running) {
+                        fragment.mStarting = false;
+                    } else {
+                        fragment.mStopping = false;
+                    }
+                    fragment.mHandler.removeCallbacks(fragment.mWatchdog);
                     fragment.updateState();
                 });
             }
@@ -316,6 +329,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onDestroy() {
         super.onDestroy();
+        mHandler.removeCallbacks(mWatchdog);
         if (mBound) {
             if (mBinder != null) {
                 try {
@@ -392,6 +406,9 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         if (resultCode == Activity.RESULT_OK) {
             Utility.startVpn(getActivity(), mProfile);
             checkState();
+        } else {
+            mStarting = false;
+            updateState();
         }
     }
 
@@ -647,9 +664,19 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     private void checkState() {
         if (getActivity() == null) return;
-        mRunning = false;
-        mSwitch.setEnabled(false);
-        mSwitch.setOnCheckedChangeListener(null);
+
+        if (mSwitch != null) {
+            mSwitch.setOnCheckedChangeListener(null);
+        }
+
+        if (mBound || mBinder != null) {
+            updateState();
+            return;
+        }
+
+        if (mSwitch != null) {
+            mSwitch.setEnabled(false);
+        }
 
         if (mBinder == null && !mBound && !mBinding) {
             long now = java.lang.System.currentTimeMillis();
@@ -684,25 +711,25 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             }
         }
 
-        mSwitch.setChecked(mRunning);
-
-        if ((!mStarting && !mStopping) || (mStarting && mRunning) || (mStopping && !mRunning)) {
-            mSwitch.setEnabled(true);
-        }
-
         if (mStarting && mRunning) {
             mStarting = false;
+            mHandler.removeCallbacks(mWatchdog);
         }
 
         if (mStopping && !mRunning) {
             mStopping = false;
+            mHandler.removeCallbacks(mWatchdog);
         }
 
+        mSwitch.setChecked(mRunning);
+        mSwitch.setEnabled(!mStarting && !mStopping);
         mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
     }
 
     private void startVpn() {
         mStarting = true;
+        mHandler.removeCallbacks(mWatchdog);
+        mHandler.postDelayed(mWatchdog, 20000);
         Intent i = VpnService.prepare(getActivity());
 
         if (i != null) {
@@ -717,6 +744,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             return;
 
         mStopping = true;
+        mHandler.removeCallbacks(mWatchdog);
+        mHandler.postDelayed(mWatchdog, 20000);
 
         try {
             mBinder.stop();
