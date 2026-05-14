@@ -27,11 +27,13 @@ public class Utility {
     }
 
     public static int exec(String cmd, OnLogListener listener) {
+        Process p = null;
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
+            p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
+                final Process fp = p;
                 new Thread(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             listener.onLog(line);
@@ -42,7 +44,7 @@ public class Utility {
                 }).start();
 
                 new Thread(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getErrorStream()))) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             listener.onLog(line);
@@ -52,15 +54,15 @@ public class Utility {
                     }
                 }).start();
             }
-            int ret = p.waitFor();
-            if (listener == null) {
-                p.getInputStream().close();
-                p.getErrorStream().close();
-            }
-            p.getOutputStream().close();
-            return ret;
+            return p.waitFor();
         } catch (Exception e) {
             return -1;
+        } finally {
+            if (p != null) {
+                try { p.getInputStream().close(); } catch (Exception ignored) {}
+                try { p.getErrorStream().close(); } catch (Exception ignored) {}
+                try { p.getOutputStream().close(); } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -69,11 +71,13 @@ public class Utility {
     }
 
     public static int exec(String[] cmd, OnLogListener listener) {
+        Process p = null;
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
+            p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
+                final Process fp = p;
                 new Thread(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             listener.onLog(line);
@@ -84,7 +88,7 @@ public class Utility {
                 }).start();
 
                 new Thread(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getErrorStream()))) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             listener.onLog(line);
@@ -94,15 +98,15 @@ public class Utility {
                     }
                 }).start();
             }
-            int ret = p.waitFor();
-            if (listener == null) {
-                p.getInputStream().close();
-                p.getErrorStream().close();
-            }
-            p.getOutputStream().close();
-            return ret;
+            return p.waitFor();
         } catch (Exception e) {
             return -1;
+        } finally {
+            if (p != null) {
+                try { p.getInputStream().close(); } catch (Exception ignored) {}
+                try { p.getErrorStream().close(); } catch (Exception ignored) {}
+                try { p.getOutputStream().close(); } catch (Exception ignored) {}
+            }
         }
     }
 

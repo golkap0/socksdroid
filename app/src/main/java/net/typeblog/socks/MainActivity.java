@@ -89,7 +89,18 @@ public class MainActivity extends Activity {
         getFragmentManager().beginTransaction().replace(R.id.content_frame, new ProfileFragment()).commit();
 
         bindService(new Intent(this, SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
         mHandler.post(mLogUpdater);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        mHandler.removeCallbacks(mLogUpdater);
     }
 
     private void updateLogControls() {
@@ -109,6 +120,5 @@ public class MainActivity extends Activity {
             unbindService(mConnection);
             mBound = false;
         }
-        mHandler.removeCallbacks(mLogUpdater);
     }
 }

@@ -309,6 +309,35 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onDestroyView() {
         super.onDestroyView();
+        if (mSwitch != null) {
+            mSwitch.removeCallbacks(mStateRunnable);
+        }
+
+        if (mPrefProfile != null) mPrefProfile.setOnPreferenceChangeListener(null);
+        if (mPrefServer != null) mPrefServer.setOnPreferenceChangeListener(null);
+        if (mPrefPort != null) mPrefPort.setOnPreferenceChangeListener(null);
+        if (mPrefUserpw != null) mPrefUserpw.setOnPreferenceChangeListener(null);
+        if (mPrefUsername != null) mPrefUsername.setOnPreferenceChangeListener(null);
+        if (mPrefPassword != null) mPrefPassword.setOnPreferenceChangeListener(null);
+        if (mPrefRoutes != null) mPrefRoutes.setOnPreferenceChangeListener(null);
+        if (mPrefDns != null) mPrefDns.setOnPreferenceChangeListener(null);
+        if (mPrefDnsPort != null) mPrefDnsPort.setOnPreferenceChangeListener(null);
+        if (mPrefPerApp != null) mPrefPerApp.setOnPreferenceChangeListener(null);
+        if (mPrefAppBypass != null) mPrefAppBypass.setOnPreferenceChangeListener(null);
+        if (mPrefAppList != null) mPrefAppList.setOnPreferenceChangeListener(null);
+        if (mPrefIPv6 != null) mPrefIPv6.setOnPreferenceChangeListener(null);
+        if (mPrefUDP != null) mPrefUDP.setOnPreferenceChangeListener(null);
+        if (mPrefUDPGW != null) mPrefUDPGW.setOnPreferenceChangeListener(null);
+        if (mPrefTunnelHost != null) mPrefTunnelHost.setOnPreferenceChangeListener(null);
+        if (mPrefTunnelUser != null) mPrefTunnelUser.setOnPreferenceChangeListener(null);
+        if (mPrefObfsKey != null) mPrefObfsKey.setOnPreferenceChangeListener(null);
+        if (mPrefUpLimit != null) mPrefUpLimit.setOnPreferenceChangeListener(null);
+        if (mPrefDownLimit != null) mPrefDownLimit.setOnPreferenceChangeListener(null);
+        if (mPrefRecvWinConn != null) mPrefRecvWinConn.setOnPreferenceChangeListener(null);
+        if (mPrefRecvWin != null) mPrefRecvWin.setOnPreferenceChangeListener(null);
+        if (mPrefCoreCount != null) mPrefCoreCount.setOnPreferenceChangeListener(null);
+        if (mPrefAuto != null) mPrefAuto.setOnPreferenceChangeListener(null);
+
         mSwitch = null;
         mPrefProfile = null;
         mPrefRoutes = null;
@@ -608,6 +637,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     private void checkState() {
+        if (getActivity() == null) return;
         mRunning = false;
         mSwitch.setEnabled(false);
         mSwitch.setOnCheckedChangeListener(null);

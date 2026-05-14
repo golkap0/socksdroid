@@ -61,23 +61,28 @@ public class ProfileManager {
             return null;
         } else {
             mProfiles.add(name);
-            mProfiles.remove(0);
-            mPref.edit().putString(PREF_PROFILE, Utility.join(mProfiles, "\n"))
+            // The first profile is the default one (from R.string.prof_default)
+            // We only want to save user-created profiles to PREF_PROFILE
+            List<String> toSave = new ArrayList<>(mProfiles);
+            toSave.remove(0);
+
+            mPref.edit().putString(PREF_PROFILE, Utility.join(toSave, "\n"))
                     .putString(PREF_LAST_PROFILE, name).apply();
-            return getDefault();
+            return getProfile(name);
         }
     }
 
     public boolean removeProfile(String name) {
         List<String> mProfiles = getProfileList();
+        // Index 0 is always the hardcoded default profile
         if (name.equals(mProfiles.get(0)) || !mProfiles.contains(name)) {
             return false;
         }
 
         new Profile(mPref, name).delete();
 
-        mProfiles.remove(0);
         mProfiles.remove(name);
+        mProfiles.remove(0); // Remove the hardcoded default before saving
 
         mPref.edit().putString(PREF_PROFILE, Utility.join(mProfiles, "\n"))
                 .remove(PREF_LAST_PROFILE).apply();
