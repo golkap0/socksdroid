@@ -7,11 +7,13 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Build;
+import android.os.SystemClock;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteCallbackList;
 import android.text.TextUtils;
 
+import net.typeblog.socks.util.BufferPool;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
@@ -95,6 +97,7 @@ public class SocksVpnService extends VpnService {
     private final StringBuilder mLogBuffer = new StringBuilder();
     private volatile boolean mLoggingEnabled = true;
     private final RemoteCallbackList<IVpnServiceCallback> mCallbacks = new RemoteCallbackList<>();
+    private volatile long mLastBroadcastTime = 0;
 
     private void updateState(boolean running) {
         mRunning = running;
@@ -124,15 +127,19 @@ public class SocksVpnService extends VpnService {
                 mLogBuffer.append(msg).append("\n");
             }
 
-            int n = mCallbacks.beginBroadcast();
-            for (int i = 0; i < n; i++) {
-                try {
-                    mCallbacks.getBroadcastItem(i).onLogAdded(msg);
-                } catch (Exception e) {
-                    // Ignore
+            long currentTime = SystemClock.elapsedRealtime();
+            if (currentTime - mLastBroadcastTime > 100) {
+                mLastBroadcastTime = currentTime;
+                int n = mCallbacks.beginBroadcast();
+                for (int i = 0; i < n; i++) {
+                    try {
+                        mCallbacks.getBroadcastItem(i).onLogAdded(msg);
+                    } catch (Exception e) {
+                        // Ignore
+                    }
                 }
+                mCallbacks.finishBroadcast();
             }
-            mCallbacks.finishBroadcast();
         }
     }
 
@@ -518,8 +525,16 @@ public class SocksVpnService extends VpnService {
             Socket proxy = null;
             boolean handoffSuccessful = false;
             try {
+                client.setTcpNoDelay(true);
+                client.setReceiveBufferSize(128 * 1024);
+                client.setSendBufferSize(128 * 1024);
+
                 proxy = new Socket("127.0.0.1", proxyPort);
                 proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
+                proxy.setTcpNoDelay(true);
+                proxy.setReceiveBufferSize(128 * 1024);
+                proxy.setSendBufferSize(128 * 1024);
+
                 InputStream in = proxy.getInputStream();
                 OutputStream out = proxy.getOutputStream();
 
@@ -584,16 +599,17 @@ public class SocksVpnService extends VpnService {
         }
 
         private void pipe(Socket s1, Socket s2) {
+            byte[] buffer = BufferPool.get();
             try {
                 InputStream is = s1.getInputStream();
                 OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
                 }
             } catch (IOException ignored) {}
             finally {
+                BufferPool.release(buffer);
                 try { s1.close(); } catch (IOException ignored) {}
                 try { s2.close(); } catch (IOException ignored) {}
             }
