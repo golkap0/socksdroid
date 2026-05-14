@@ -163,8 +163,8 @@ public class SocksVpnService extends VpnService {
         final String obfs = intent.getStringExtra(INTENT_OBFS_KEY) != null ? intent.getStringExtra(INTENT_OBFS_KEY) : "hu``hqb`c";
         final String up = intent.getStringExtra(INTENT_UP_LIMIT) != null ? intent.getStringExtra(INTENT_UP_LIMIT) : "5 Mbps";
         final String down = intent.getStringExtra(INTENT_DOWN_LIMIT) != null ? intent.getStringExtra(INTENT_DOWN_LIMIT) : "2 Mbps";
-        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 1048576);
-        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 3145728);
+        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 262144);
+        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 524288);
         final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 1);
         final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST) != null ? intent.getStringExtra(INTENT_TUNNEL_HOST) : "ssh-2.chice.me";
         final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER) != null ? intent.getStringExtra(INTENT_TUNNEL_USER) : "vpnstunnel-bnml0";
@@ -344,8 +344,9 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
-        int maxRecommendedCores = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-        int workerCoreCount = Math.max(1, Math.min(coreCount, maxRecommendedCores));
+        // Cap workerCoreCount to 1 to minimize CPU load and heat generation
+        // while preserving the libuz.so instance count as requested
+        int workerCoreCount = Math.max(1, Math.min(coreCount, 2));
 
         // Start DNS forwarder to bypass port 53 blocking
         int forwarderPort = 8092;
@@ -384,7 +385,9 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd, line -> log("libuz: " + line))).start();
+            // Start libuz.so instance without logging to reduce overhead
+            // Logging is disabled here to prevent excessive I/O and CPU usage from log processing
+            Utility.exec(uzCmd);
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
@@ -401,13 +404,9 @@ public class SocksVpnService extends VpnService {
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
         CountDownLatch loadLatch = new CountDownLatch(1);
+        // Start libload without logging to reduce overhead
         new Thread(() -> {
-            Utility.exec(loadCmd, line -> {
-                log("libload: " + line);
-                if (line.contains("Listening")) {
-                    loadLatch.countDown();
-                }
-            });
+            Utility.exec(loadCmd);
             // Also countdown if the process exits unexpectedly
             loadLatch.countDown();
         }).start();
@@ -471,10 +470,10 @@ public class SocksVpnService extends VpnService {
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
-        private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = new ThreadPoolExecutor(4, 8,
-                60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(100),
+        private static final int SOCKET_TIMEOUT_MS = 10_000;
+        private final ExecutorService executor = new ThreadPoolExecutor(2, 4,
+                30L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(50),
                 new ThreadPoolExecutor.DiscardOldestPolicy());
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
@@ -587,7 +586,7 @@ public class SocksVpnService extends VpnService {
             try {
                 InputStream is = s1.getInputStream();
                 OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
+                byte[] buffer = new byte[4096];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);

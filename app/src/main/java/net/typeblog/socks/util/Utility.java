@@ -22,14 +22,13 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
 
     // shared executor for reading process output streams
-    // core and max pool sizes are based on the device's processor count to optimize resource usage
-    // uses a bounded queue and DiscardOldestPolicy to prevent memory exhaustion during command bursts
-    private static final int CPU_COUNT = Runtime.getRuntime().availableProcessors();
+    // optimized for lower thermal impact: fixed small thread pool with bounded queue
+    // reduced core threads and max threads to minimize CPU wake-ups and context switching
     private static final ThreadPoolExecutor LOG_EXECUTOR = new ThreadPoolExecutor(
-            Math.max(2, Math.min(CPU_COUNT - 1, 4)),
-            Math.max(4, 2 * CPU_COUNT + 1),
-            60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(100),
+            2,  // core pool size: minimal threads for basic logging
+            4,  // max pool size: capped to prevent excessive thread creation
+            30L, TimeUnit.SECONDS,  // shorter keep-alive to release idle threads faster
+            new LinkedBlockingQueue<>(50),  // smaller queue to reduce memory pressure
             new ThreadPoolExecutor.DiscardOldestPolicy());
 
     public interface OnLogListener {
