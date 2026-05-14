@@ -14,6 +14,8 @@ import android.widget.Switch;
 import android.widget.TextView;
 import androidx.drawerlayout.widget.DrawerLayout;
 
+import java.lang.ref.WeakReference;
+
 public class MainActivity extends Activity {
     private DrawerLayout mDrawerLayout;
     private TextView mTvLogs;
@@ -21,13 +23,49 @@ public class MainActivity extends Activity {
     private Switch mSwitchLog;
     private IVpnService mBinder;
     private boolean mBound = false;
+    private boolean mBinding = false;
     private final Handler mHandler = new Handler();
+    private final IVpnServiceCallback mCallback = new VpnServiceCallbackStub(this);
+
+    private static class VpnServiceCallbackStub extends IVpnServiceCallback.Stub {
+        private final WeakReference<MainActivity> mActivity;
+
+        VpnServiceCallbackStub(MainActivity activity) {
+            mActivity = new WeakReference<>(activity);
+        }
+
+        @Override
+        public void onStateChanged(boolean running) {
+            // Handled in ProfileFragment
+        }
+
+        @Override
+        public void onLogAdded(String line) {
+            MainActivity activity = mActivity.get();
+            if (activity != null) {
+                activity.mHandler.post(() -> {
+                    if (activity.mTvLogs != null) {
+                        activity.mTvLogs.append(line + "\n");
+                    }
+                });
+            }
+        }
+    }
 
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             mBinder = IVpnService.Stub.asInterface(service);
             mBound = true;
+            try {
+                mBinder.registerCallback(mCallback);
+                String logs = mBinder.getLogs();
+                if (logs != null) {
+                    mTvLogs.setText(logs);
+                }
+            } catch (Exception e) {
+                // Ignore
+            }
             updateLogControls();
         }
 
@@ -35,23 +73,6 @@ public class MainActivity extends Activity {
         public void onServiceDisconnected(ComponentName name) {
             mBinder = null;
             mBound = false;
-        }
-    };
-
-    private final Runnable mLogUpdater = new Runnable() {
-        @Override
-        public void run() {
-            if (mBound && mBinder != null) {
-                try {
-                    String logs = mBinder.getLogs();
-                    if (logs != null) {
-                        mTvLogs.setText(logs);
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-            mHandler.postDelayed(this, 2000);
         }
     };
 
@@ -71,7 +92,7 @@ public class MainActivity extends Activity {
                     mBinder.clearLogs();
                     mTvLogs.setText("");
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
             }
         });
@@ -81,23 +102,23 @@ public class MainActivity extends Activity {
                 try {
                     mBinder.setLoggingEnabled(checked);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
             }
         });
 
         getFragmentManager().beginTransaction().replace(R.id.content_frame, new ProfileFragment()).commit();
 
-        bindService(new Intent(this, SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
-        mHandler.post(mLogUpdater);
+        mBinding = bindService(new Intent(this, SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
     }
+
 
     private void updateLogControls() {
         if (mBound && mBinder != null) {
             try {
                 mSwitchLog.setChecked(mBinder.isLoggingEnabled());
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
         }
     }
@@ -106,9 +127,19 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         if (mBound) {
-            unbindService(mConnection);
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    // Ignore
+                }
+            }
             mBound = false;
         }
-        mHandler.removeCallbacks(mLogUpdater);
+
+        if (mBinding) {
+            unbindService(mConnection);
+            mBinding = false;
+        }
     }
 }

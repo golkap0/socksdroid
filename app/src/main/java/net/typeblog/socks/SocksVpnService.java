@@ -9,8 +9,8 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
+import android.os.RemoteCallbackList;
 import android.text.TextUtils;
-import android.util.Log;
 
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
@@ -25,11 +25,14 @@ import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
-import static net.typeblog.socks.BuildConfig.DEBUG;
 
 public class SocksVpnService extends VpnService {
     class VpnBinder extends IVpnService.Stub {
@@ -66,35 +69,75 @@ public class SocksVpnService extends VpnService {
         public boolean isLoggingEnabled() {
             return mLoggingEnabled;
         }
-    }
 
-    private static final String TAG = SocksVpnService.class.getSimpleName();
+        @Override
+        public void registerCallback(IVpnServiceCallback cb) {
+            mCallbacks.register(cb);
+            try {
+                cb.onStateChanged(mRunning);
+            } catch (Exception e) {
+                // Ignore
+            }
+        }
+
+        @Override
+        public void unregisterCallback(IVpnServiceCallback cb) {
+            mCallbacks.unregister(cb);
+        }
+    }
 
     private ParcelFileDescriptor mInterface;
     private volatile boolean mRunning = false;
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
+    private ScheduledExecutorService mRetryExecutor;
     private final StringBuilder mLogBuffer = new StringBuilder();
     private volatile boolean mLoggingEnabled = true;
+    private final RemoteCallbackList<IVpnServiceCallback> mCallbacks = new RemoteCallbackList<>();
+
+    private void updateState(boolean running) {
+        mRunning = running;
+        int n = mCallbacks.beginBroadcast();
+        for (int i = 0; i < n; i++) {
+            try {
+                mCallbacks.getBroadcastItem(i).onStateChanged(running);
+            } catch (Exception e) {
+                // Ignore
+            }
+        }
+        mCallbacks.finishBroadcast();
+    }
 
     private void log(String msg) {
         if (mLoggingEnabled) {
             synchronized (mLogBuffer) {
+                if (mLogBuffer.length() > 50000) {
+                    // Optimized pruning: find a newline near the 10k mark to preserve log integrity
+                    int pruneIdx = mLogBuffer.indexOf("\n", 10000);
+                    if (pruneIdx != -1) {
+                        mLogBuffer.delete(0, pruneIdx + 1);
+                    } else {
+                        mLogBuffer.delete(0, 10000);
+                    }
+                }
                 mLogBuffer.append(msg).append("\n");
-                if (mLogBuffer.length() > 10000) {
-                    mLogBuffer.delete(0, 2000);
+            }
+
+            int n = mCallbacks.beginBroadcast();
+            for (int i = 0; i < n; i++) {
+                try {
+                    mCallbacks.getBroadcastItem(i).onLogAdded(msg);
+                } catch (Exception e) {
+                    // Ignore
                 }
             }
+            mCallbacks.finishBroadcast();
         }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-
-        if (DEBUG) {
-            Log.d(TAG, "starting");
-        }
 
         if (intent == null) {
             return START_STICKY;
@@ -160,9 +203,6 @@ public class SocksVpnService extends VpnService {
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
         if (mInterface != null) {
-            if (DEBUG)
-                Log.d(TAG, "fd: " + mInterface.getFd());
-
             mStarting = true;
             final int fd = mInterface.getFd();
             new Thread(() -> {
@@ -204,10 +244,15 @@ public class SocksVpnService extends VpnService {
             mForwarder = null;
         }
 
+        if (mRetryExecutor != null) {
+            mRetryExecutor.shutdownNow();
+            mRetryExecutor = null;
+        }
+
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // Kill libuz.so and libload.so
+        // Kill native processes
         Utility.exec("pkill -9 -f libuz.so");
         Utility.exec("pkill -9 -f libload.so");
         Utility.exec("pkill -9 -f libpdnsd.so");
@@ -218,12 +263,12 @@ public class SocksVpnService extends VpnService {
                 System.jniclose(mInterface.getFd());
                 mInterface.close();
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
             mInterface = null;
         }
 
-        mRunning = false;
+        updateState(false);
         stopSelf();
     }
 
@@ -254,7 +299,7 @@ public class SocksVpnService extends VpnService {
             try {
                 b.addDisallowedApplication("net.typeblog.socks");
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
         } else {
             if (apps == null) {
@@ -265,7 +310,7 @@ public class SocksVpnService extends VpnService {
                 try {
                     b.addDisallowedApplication("net.typeblog.socks");
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Ignore
                 }
 
                 for (String p : apps) {
@@ -275,7 +320,7 @@ public class SocksVpnService extends VpnService {
                     try {
                         b.addDisallowedApplication(p.trim());
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }
             } else {
@@ -287,7 +332,7 @@ public class SocksVpnService extends VpnService {
                     try {
                         b.addAllowedApplication(p.trim());
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Ignore
                     }
                 }
             }
@@ -355,10 +400,21 @@ public class SocksVpnService extends VpnService {
         loadCmd[5] = "-tunnel";
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
-        new Thread(() -> Utility.exec(loadCmd)).start();
+        CountDownLatch loadLatch = new CountDownLatch(1);
+        new Thread(() -> {
+            Utility.exec(loadCmd, line -> {
+                log("libload: " + line);
+                if (line.contains("Listening")) {
+                    loadLatch.countDown();
+                }
+            });
+            // Also countdown if the process exits unexpectedly
+            loadLatch.countDown();
+        }).start();
 
         try {
-            Thread.sleep(1000);
+            // Wait for libload to start listening, but with a timeout
+            loadLatch.await(2, TimeUnit.SECONDS);
         } catch (InterruptedException ignored) {}
 
         String command = String.format(Locale.US,
@@ -367,7 +423,7 @@ public class SocksVpnService extends VpnService {
                         + " --socks-server-addr 127.0.0.1:%d"
                         + " --tunfd %d"
                         + " --tunmtu 1500"
-                        + " --loglevel 3"
+                        + " --loglevel 0"
                         + " --pid %s/tun2socks.pid"
                         + " --sock %s/sock_path"
                 , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
@@ -382,34 +438,31 @@ public class SocksVpnService extends VpnService {
             command += " --udpgw-remote-server-addr " + udpgw;
         }
 
-        if (DEBUG) {
-            Log.d(TAG, command);
-        }
-
         if (Utility.exec(command) != 0) {
             stopMe();
             return;
         }
 
-        // Try to send the Fd through socket.
-        int i = 0;
-        while (i < 5) {
-            if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
-                mRunning = true;
-                return;
+        // Try to send the Fd through socket with non-blocking retries.
+        mRetryExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        final int[] retryCount = {0};
+        final String sockPath = getApplicationInfo().dataDir + "/sock_path";
+
+        mRetryExecutor.schedule(new Runnable() {
+            @Override
+            public void run() {
+                if (System.sendfd(fd, sockPath) != -1) {
+                    updateState(true);
+                    if (mRetryExecutor != null) mRetryExecutor.shutdown();
+                } else if (retryCount[0] < 5) {
+                    retryCount[0]++;
+                    if (mRetryExecutor != null) mRetryExecutor.schedule(this, retryCount[0], TimeUnit.SECONDS);
+                } else {
+                    stopMe();
+                    if (mRetryExecutor != null) mRetryExecutor.shutdown();
+                }
             }
-
-            i++;
-
-            try {
-                Thread.sleep(1000L * i);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-
-        // Should not get here. Must be a failure.
-        stopMe();
+        }, 0, TimeUnit.SECONDS);
     }
 
     private class SocksForwarder extends Thread {
@@ -419,7 +472,10 @@ public class SocksVpnService extends VpnService {
         private final int proxyPort;
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = Executors.newCachedThreadPool();
+        private final ExecutorService executor = new ThreadPoolExecutor(4, 8,
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(100),
+                new ThreadPoolExecutor.DiscardOldestPolicy());
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;

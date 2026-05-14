@@ -49,7 +49,31 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private long mLastBindAttemptMs = 0L;
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new VpnServiceConnection(this);
-    private final Runnable mStateRunnable = new StateRunnable(this);
+    private final IVpnServiceCallback mCallback = new VpnServiceCallbackStub(this);
+
+    private static class VpnServiceCallbackStub extends IVpnServiceCallback.Stub {
+        private final WeakReference<ProfileFragment> mFragment;
+
+        VpnServiceCallbackStub(ProfileFragment fragment) {
+            mFragment = new WeakReference<>(fragment);
+        }
+
+        @Override
+        public void onStateChanged(boolean running) {
+            ProfileFragment fragment = mFragment.get();
+            if (fragment != null && fragment.mSwitch != null) {
+                fragment.mSwitch.post(() -> {
+                    fragment.mRunning = running;
+                    fragment.updateState();
+                });
+            }
+        }
+
+        @Override
+        public void onLogAdded(String line) {
+            // Handled in MainActivity
+        }
+    }
 
     private static class VpnServiceConnection implements ServiceConnection {
         private final WeakReference<ProfileFragment> mFragment;
@@ -68,9 +92,10 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             fragment.mBinder = IVpnService.Stub.asInterface(binder);
 
             try {
+                fragment.mBinder.registerCallback(fragment.mCallback);
                 fragment.mRunning = fragment.mBinder.isRunning();
             } catch (Exception e) {
-                e.printStackTrace();
+                // Ignore
             }
 
             if (fragment.mRunning) {
@@ -89,22 +114,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         }
     }
 
-    private static class StateRunnable implements Runnable {
-        private final WeakReference<ProfileFragment> mFragment;
-
-        StateRunnable(ProfileFragment fragment) {
-            mFragment = new WeakReference<>(fragment);
-        }
-
-        @Override
-        public void run() {
-            ProfileFragment fragment = mFragment.get();
-            if (fragment == null || fragment.mSwitch == null) return;
-
-            fragment.updateState();
-            fragment.mSwitch.postDelayed(this, 1000);
-        }
-    }
     private IVpnService mBinder;
 
     private ListPreference mPrefProfile, mPrefRoutes;
@@ -132,7 +141,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         MenuItem s = menu.findItem(R.id.switch_main);
         mSwitch = s.getActionView().findViewById(R.id.switch_action_button);
         mSwitch.setOnCheckedChangeListener(this);
-        mSwitch.postDelayed(mStateRunnable, 1000);
         checkState();
     }
 
@@ -293,23 +301,61 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onResume() {
         super.onResume();
-        if (mSwitch != null) {
-            mSwitch.postDelayed(mStateRunnable, 1000);
-        }
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        if (mSwitch != null) {
-            mSwitch.removeCallbacks(mStateRunnable);
-        }
     }
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
         mSwitch = null;
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mBound) {
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    // Ignore
+                }
+            }
+        }
+
+        if (mBinding && getActivity() != null) {
+            getActivity().unbindService(mConnection);
+        }
+
+        if (mPrefProfile != null) mPrefProfile.setOnPreferenceChangeListener(null);
+        if (mPrefServer != null) mPrefServer.setOnPreferenceChangeListener(null);
+        if (mPrefPort != null) mPrefPort.setOnPreferenceChangeListener(null);
+        if (mPrefUserpw != null) mPrefUserpw.setOnPreferenceChangeListener(null);
+        if (mPrefUsername != null) mPrefUsername.setOnPreferenceChangeListener(null);
+        if (mPrefPassword != null) mPrefPassword.setOnPreferenceChangeListener(null);
+        if (mPrefRoutes != null) mPrefRoutes.setOnPreferenceChangeListener(null);
+        if (mPrefDns != null) mPrefDns.setOnPreferenceChangeListener(null);
+        if (mPrefDnsPort != null) mPrefDnsPort.setOnPreferenceChangeListener(null);
+        if (mPrefPerApp != null) mPrefPerApp.setOnPreferenceChangeListener(null);
+        if (mPrefAppBypass != null) mPrefAppBypass.setOnPreferenceChangeListener(null);
+        if (mPrefAppList != null) mPrefAppList.setOnPreferenceChangeListener(null);
+        if (mPrefIPv6 != null) mPrefIPv6.setOnPreferenceChangeListener(null);
+        if (mPrefUDP != null) mPrefUDP.setOnPreferenceChangeListener(null);
+        if (mPrefUDPGW != null) mPrefUDPGW.setOnPreferenceChangeListener(null);
+        if (mPrefTunnelHost != null) mPrefTunnelHost.setOnPreferenceChangeListener(null);
+        if (mPrefTunnelUser != null) mPrefTunnelUser.setOnPreferenceChangeListener(null);
+        if (mPrefObfsKey != null) mPrefObfsKey.setOnPreferenceChangeListener(null);
+        if (mPrefUpLimit != null) mPrefUpLimit.setOnPreferenceChangeListener(null);
+        if (mPrefDownLimit != null) mPrefDownLimit.setOnPreferenceChangeListener(null);
+        if (mPrefRecvWinConn != null) mPrefRecvWinConn.setOnPreferenceChangeListener(null);
+        if (mPrefRecvWin != null) mPrefRecvWin.setOnPreferenceChangeListener(null);
+        if (mPrefCoreCount != null) mPrefCoreCount.setOnPreferenceChangeListener(null);
+        if (mPrefAuto != null) mPrefAuto.setOnPreferenceChangeListener(null);
+
         mPrefProfile = null;
         mPrefRoutes = null;
         mPrefServer = null;
@@ -334,14 +380,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefIPv6 = null;
         mPrefUDP = null;
         mPrefAuto = null;
-    }
 
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        if (mBound) {
-            getActivity().unbindService(mConnection);
-        }
         mBinder = null;
         mBound = false;
         mBinding = false;
@@ -608,6 +647,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     private void checkState() {
+        if (getActivity() == null) return;
         mRunning = false;
         mSwitch.setEnabled(false);
         mSwitch.setOnCheckedChangeListener(null);
@@ -679,12 +719,12 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         try {
             mBinder.stop();
         } catch (Exception e) {
-            e.printStackTrace();
+            // Ignore
         }
 
         mBinder = null;
 
-        if (mBound) {
+        if (mBinding && getActivity() != null) {
             getActivity().unbindService(mConnection);
         }
         mBound = false;
