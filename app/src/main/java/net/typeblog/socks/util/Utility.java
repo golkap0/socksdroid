@@ -11,25 +11,12 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 import net.typeblog.socks.R;
 import net.typeblog.socks.SocksVpnService;
 import static net.typeblog.socks.util.Constants.*;
 
 public class Utility {
-
-    // shared executor for reading process output streams
-    // core and max pool sizes are based on the device's processor count to optimize resource usage
-    // uses a bounded queue and DiscardOldestPolicy to prevent memory exhaustion during command bursts
-    private static final ThreadPoolExecutor LOG_EXECUTOR = new ThreadPoolExecutor(
-            2,
-            4,
-            60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(50),
-            new ThreadPoolExecutor.DiscardOldestPolicy());
 
     public interface OnLogListener {
         void onLog(String line);
@@ -45,7 +32,7 @@ public class Utility {
             p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
                 final Process fp = p;
-                LOG_EXECUTOR.execute(() -> {
+                Thread stdoutThread = new Thread(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -55,8 +42,10 @@ public class Utility {
                         // Ignore
                     }
                 });
+                stdoutThread.setDaemon(true);
+                stdoutThread.start();
 
-                LOG_EXECUTOR.execute(() -> {
+                Thread stderrThread = new Thread(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -66,16 +55,16 @@ public class Utility {
                         // Ignore
                     }
                 });
+                stderrThread.setDaemon(true);
+                stderrThread.start();
             }
             return p.waitFor();
         } catch (Exception e) {
             return -1;
         } finally {
             if (p != null) {
-                if (listener == null) {
-                    try { p.getInputStream().close(); } catch (Exception ignored) {}
-                    try { p.getErrorStream().close(); } catch (Exception ignored) {}
-                }
+                try { p.getInputStream().close(); } catch (Exception ignored) {}
+                try { p.getErrorStream().close(); } catch (Exception ignored) {}
                 try { p.getOutputStream().close(); } catch (Exception ignored) {}
             }
         }
@@ -91,7 +80,7 @@ public class Utility {
             p = Runtime.getRuntime().exec(cmd);
             if (listener != null) {
                 final Process fp = p;
-                LOG_EXECUTOR.execute(() -> {
+                Thread stdoutThread = new Thread(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -101,8 +90,10 @@ public class Utility {
                         // Ignore
                     }
                 });
+                stdoutThread.setDaemon(true);
+                stdoutThread.start();
 
-                LOG_EXECUTOR.execute(() -> {
+                Thread stderrThread = new Thread(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
@@ -112,16 +103,16 @@ public class Utility {
                         // Ignore
                     }
                 });
+                stderrThread.setDaemon(true);
+                stderrThread.start();
             }
             return p.waitFor();
         } catch (Exception e) {
             return -1;
         } finally {
             if (p != null) {
-                if (listener == null) {
-                    try { p.getInputStream().close(); } catch (Exception ignored) {}
-                    try { p.getErrorStream().close(); } catch (Exception ignored) {}
-                }
+                try { p.getInputStream().close(); } catch (Exception ignored) {}
+                try { p.getErrorStream().close(); } catch (Exception ignored) {}
                 try { p.getOutputStream().close(); } catch (Exception ignored) {}
             }
         }
