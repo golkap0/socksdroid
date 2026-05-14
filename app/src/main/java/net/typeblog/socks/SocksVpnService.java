@@ -116,12 +116,12 @@ public class SocksVpnService extends VpnService {
         if (mLoggingEnabled) {
             synchronized (mLogBuffer) {
                 if (mLogBuffer.length() > 50000) {
-                    // Optimized pruning: find a newline near the 10k mark to preserve log integrity
-                    int pruneIdx = mLogBuffer.indexOf("\n", 10000);
+                    // Optimized pruning: find a newline near the 20k mark to preserve log integrity
+                    int pruneIdx = mLogBuffer.indexOf("\n", 20000);
                     if (pruneIdx != -1) {
                         mLogBuffer.delete(0, pruneIdx + 1);
                     } else {
-                        mLogBuffer.delete(0, 10000);
+                        mLogBuffer.delete(0, 20000);
                     }
                 }
                 mLogBuffer.append(msg).append("\n");
@@ -391,7 +391,10 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd, line -> log("libuz: " + line))).start();
+            new Thread(() -> Utility.exec(uzCmd, line -> {
+                if (line.contains("forward") && line.contains("bytes")) return;
+                log("libuz: " + line);
+            })).start();
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
@@ -410,6 +413,7 @@ public class SocksVpnService extends VpnService {
         CountDownLatch loadLatch = new CountDownLatch(1);
         new Thread(() -> {
             Utility.exec(loadCmd, line -> {
+                if (line.contains("forward") && line.contains("bytes")) return;
                 log("libload: " + line);
                 if (line.contains("Listening")) {
                     loadLatch.countDown();
