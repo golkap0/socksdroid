@@ -2,7 +2,6 @@ package net.typeblog.socks.util;
 
 import android.content.Context;
 import android.content.Intent;
-import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -136,8 +135,9 @@ public class Utility {
                 // If standard kill failed, try kill -9
                 Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
             }
-            if(!file.delete())
-                Log.w(TAG, "failed to delete pidfile");
+            if(!file.delete()) {
+                // failed to delete pidfile
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -164,8 +164,9 @@ public class Utility {
         File f = new File(context.getFilesDir() + "/pdnsd.conf");
 
         if (f.exists()) {
-            if(!f.delete())
-                Log.w(TAG, "failed to delete pdnsd.conf");
+            if(!f.delete()) {
+                // failed to delete pdnsd.conf
+            }
         }
 
         try {
@@ -181,8 +182,9 @@ public class Utility {
 
         if (!cache.exists()) {
             try {
-                if(!cache.createNewFile())
-                    Log.w(TAG, "failed to create pdnsd.cache");
+                if(!cache.createNewFile()) {
+                    // failed to create pdnsd.cache
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }

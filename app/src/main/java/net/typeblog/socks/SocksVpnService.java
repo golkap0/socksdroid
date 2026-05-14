@@ -9,8 +9,8 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
+import android.os.PowerManager;
 import android.text.TextUtils;
-import android.util.Log;
 
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
@@ -26,6 +26,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -77,6 +79,10 @@ public class SocksVpnService extends VpnService {
     private SocksForwarder mForwarder;
     private final StringBuilder mLogBuffer = new StringBuilder();
     private volatile boolean mLoggingEnabled = true;
+    private PowerManager.WakeLock mWakeLock;
+    private static final int THREAD_POOL_CORE_SIZE = 2;
+    private static final int THREAD_POOL_MAX_SIZE = 8;
+    private static final int THREAD_KEEP_ALIVE_SECONDS = 60;
 
     private void log(String msg) {
         if (mLoggingEnabled) {
@@ -92,16 +98,23 @@ public class SocksVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
-        if (DEBUG) {
-            Log.d(TAG, "starting");
-        }
-
         if (intent == null) {
             return START_STICKY;
         }
 
         if (mRunning || mStarting) {
             return START_STICKY;
+        }
+
+        // Acquire partial wake lock to keep CPU running during VPN operation
+        // This is more efficient than keeping the screen on and prevents battery drain
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        if (powerManager != null && mWakeLock == null) {
+            mWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SocksVpnService::WakeLock");
+            mWakeLock.setReferenceCounted(false);
+        }
+        if (mWakeLock != null && !mWakeLock.isHeld()) {
+            mWakeLock.acquire(10*60*1000L /*10 minutes*/);
         }
 
         final String name = intent.getStringExtra(INTENT_NAME);
@@ -151,18 +164,16 @@ public class SocksVpnService extends VpnService {
         startForeground(NOTIFICATION_ID, builder
                 .setContentTitle(getString(R.string.notify_title))
                 .setContentText(String.format(getString(R.string.notify_msg), name))
-                .setPriority(Notification.PRIORITY_MIN)
+                .setPriority(Notification.PRIORITY_LOW)
                 .setSmallIcon(R.drawable.ic_vpn)
                 .setContentIntent(contentIntent)
+                .setOngoing(true)
                 .build());
 
         // Create an fd.
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
         if (mInterface != null) {
-            if (DEBUG)
-                Log.d(TAG, "fd: " + mInterface.getFd());
-
             mStarting = true;
             final int fd = mInterface.getFd();
             new Thread(() -> {
@@ -197,6 +208,12 @@ public class SocksVpnService extends VpnService {
     }
 
     private void stopMe() {
+        // Release wake lock to allow device to sleep and save battery
+        if (mWakeLock != null && mWakeLock.isHeld()) {
+            mWakeLock.release();
+            mWakeLock = null;
+        }
+
         stopForeground(true);
 
         if (mForwarder != null) {
@@ -299,8 +316,10 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
+        // Limit cores to prevent excessive CPU usage and heat generation
         int maxRecommendedCores = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-        int workerCoreCount = Math.max(1, Math.min(coreCount, maxRecommendedCores));
+        // Cap at 4 cores maximum for battery efficiency
+        int workerCoreCount = Math.max(1, Math.min(coreCount, Math.min(maxRecommendedCores, 4)));
 
         // Start DNS forwarder to bypass port 53 blocking
         int forwarderPort = 8092;
@@ -357,8 +376,9 @@ public class SocksVpnService extends VpnService {
 
         new Thread(() -> Utility.exec(loadCmd)).start();
 
+        // Reduced sleep time for faster startup while maintaining stability
         try {
-            Thread.sleep(1000);
+            Thread.sleep(500);
         } catch (InterruptedException ignored) {}
 
         String command = String.format(Locale.US,
@@ -382,16 +402,12 @@ public class SocksVpnService extends VpnService {
             command += " --udpgw-remote-server-addr " + udpgw;
         }
 
-        if (DEBUG) {
-            Log.d(TAG, command);
-        }
-
         if (Utility.exec(command) != 0) {
             stopMe();
             return;
         }
 
-        // Try to send the Fd through socket.
+        // Try to send the Fd through socket with optimized retry logic
         int i = 0;
         while (i < 5) {
             if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
@@ -402,7 +418,8 @@ public class SocksVpnService extends VpnService {
             i++;
 
             try {
-                Thread.sleep(1000L * i);
+                // Reduced sleep time between retries for faster connection
+                Thread.sleep(500L * i);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -419,13 +436,22 @@ public class SocksVpnService extends VpnService {
         private final int proxyPort;
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = Executors.newCachedThreadPool();
+        // Use bounded thread pool to limit concurrent threads and reduce CPU/battery usage
+        private final ExecutorService executor;
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
             this.targetHost = targetHost;
             this.targetPort = targetPort;
             this.proxyPort = proxyPort;
+            // Bounded thread pool prevents excessive thread creation which causes heat and battery drain
+            this.executor = new ThreadPoolExecutor(
+                    THREAD_POOL_CORE_SIZE,
+                    THREAD_POOL_MAX_SIZE,
+                    THREAD_KEEP_ALIVE_SECONDS,
+                    TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<>(100)
+            );
         }
 
         @Override
@@ -448,13 +474,19 @@ public class SocksVpnService extends VpnService {
                 if (serverSocket != null) serverSocket.close();
             } catch (IOException ignored) {}
 
-            executor.shutdownNow();
+            // Graceful shutdown with timeout to prevent resource leaks
+            executor.shutdown();
             try {
-                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                if (!executor.awaitTermination(3, TimeUnit.SECONDS)) {
                     executor.shutdownNow();
+                    // Wait additional time for forced shutdown
+                    if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                        // Executor did not terminate
+                    }
                 }
-            } catch (InterruptedException ignored) {
+            } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                executor.shutdownNow();
             }
         }
 
@@ -531,10 +563,12 @@ public class SocksVpnService extends VpnService {
             try {
                 InputStream is = s1.getInputStream();
                 OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
+                // Larger buffer reduces number of read/write operations and CPU usage
+                byte[] buffer = new byte[32768];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
+                    os.flush();
                 }
             } catch (IOException ignored) {}
             finally {
