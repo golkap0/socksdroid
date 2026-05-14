@@ -23,7 +23,8 @@ public class Utility {
 
     private static final ThreadPoolExecutor LOG_EXECUTOR = new ThreadPoolExecutor(4, 20,
             60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>());
+            new LinkedBlockingQueue<>(100),
+            new ThreadPoolExecutor.DiscardOldestPolicy());
 
     public interface OnLogListener {
         void onLog(String line);

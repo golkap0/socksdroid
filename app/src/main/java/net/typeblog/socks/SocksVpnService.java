@@ -25,6 +25,7 @@ import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -389,10 +390,20 @@ public class SocksVpnService extends VpnService {
         loadCmd[5] = "-tunnel";
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
-        new Thread(() -> Utility.exec(loadCmd)).start();
+        CountDownLatch loadLatch = new CountDownLatch(1);
+        new Thread(() -> {
+            Utility.exec(loadCmd, line -> {
+                if (line.contains("Listening")) {
+                    loadLatch.countDown();
+                }
+            });
+            // Also countdown if the process exits unexpectedly
+            loadLatch.countDown();
+        }).start();
 
         try {
-            Thread.sleep(1000);
+            // Wait for libload to start listening, but with a timeout
+            loadLatch.await(2, TimeUnit.SECONDS);
         } catch (InterruptedException ignored) {}
 
         String command = String.format(Locale.US,
