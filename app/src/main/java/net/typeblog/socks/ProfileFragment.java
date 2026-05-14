@@ -313,6 +313,16 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             mSwitch.removeCallbacks(mStateRunnable);
         }
 
+        mSwitch = null;
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mBound) {
+            getActivity().unbindService(mConnection);
+        }
+
         if (mPrefProfile != null) mPrefProfile.setOnPreferenceChangeListener(null);
         if (mPrefServer != null) mPrefServer.setOnPreferenceChangeListener(null);
         if (mPrefPort != null) mPrefPort.setOnPreferenceChangeListener(null);
@@ -338,7 +348,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         if (mPrefCoreCount != null) mPrefCoreCount.setOnPreferenceChangeListener(null);
         if (mPrefAuto != null) mPrefAuto.setOnPreferenceChangeListener(null);
 
-        mSwitch = null;
         mPrefProfile = null;
         mPrefRoutes = null;
         mPrefServer = null;
@@ -363,14 +372,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mPrefIPv6 = null;
         mPrefUDP = null;
         mPrefAuto = null;
-    }
 
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        if (mBound) {
-            getActivity().unbindService(mConnection);
-        }
         mBinder = null;
         mBound = false;
         mBinding = false;

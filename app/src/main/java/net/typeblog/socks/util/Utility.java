@@ -59,8 +59,10 @@ public class Utility {
             return -1;
         } finally {
             if (p != null) {
-                try { p.getInputStream().close(); } catch (Exception ignored) {}
-                try { p.getErrorStream().close(); } catch (Exception ignored) {}
+                if (listener == null) {
+                    try { p.getInputStream().close(); } catch (Exception ignored) {}
+                    try { p.getErrorStream().close(); } catch (Exception ignored) {}
+                }
                 try { p.getOutputStream().close(); } catch (Exception ignored) {}
             }
         }
@@ -103,8 +105,10 @@ public class Utility {
             return -1;
         } finally {
             if (p != null) {
-                try { p.getInputStream().close(); } catch (Exception ignored) {}
-                try { p.getErrorStream().close(); } catch (Exception ignored) {}
+                if (listener == null) {
+                    try { p.getInputStream().close(); } catch (Exception ignored) {}
+                    try { p.getErrorStream().close(); } catch (Exception ignored) {}
+                }
                 try { p.getOutputStream().close(); } catch (Exception ignored) {}
             }
         }
