@@ -16,20 +16,16 @@ import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -465,17 +461,31 @@ public class SocksVpnService extends VpnService {
         }, 0, TimeUnit.SECONDS);
     }
 
-    private class SocksForwarder extends Thread {
+    private class SocksForwarder {
         private final int listenPort;
         private final String targetHost;
         private final int targetPort;
         private final int proxyPort;
-        private ServerSocket serverSocket;
-        private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = new ThreadPoolExecutor(4, 8,
-                60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(100),
-                new ThreadPoolExecutor.DiscardOldestPolicy());
+        private volatile boolean running = false;
+        private Thread selectorThread;
+        private ServerSocketChannel serverChannel;
+        private Selector selector;
+
+        private class PipeContext {
+            SocketChannel clientChannel;
+            SocketChannel proxyChannel;
+            ByteBuffer clientToProxyBuffer;
+            ByteBuffer proxyToClientBuffer;
+            boolean handshakeSent;
+            boolean handshakeComplete;
+            boolean connectSent;
+            boolean connectComplete;
+
+            PipeContext() {
+                clientToProxyBuffer = ByteBuffer.allocateDirect(8192);
+                proxyToClientBuffer = ByteBuffer.allocateDirect(8192);
+            }
+        }
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -484,135 +494,318 @@ public class SocksVpnService extends VpnService {
             this.proxyPort = proxyPort;
         }
 
-        @Override
-        public void run() {
+        public void start() {
+            if (running) return;
+            running = true;
+
+            selectorThread = new Thread(this::selectorLoop);
+            selectorThread.setDaemon(true);
+            selectorThread.start();
+        }
+
+        private void selectorLoop() {
             try {
-                serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
-                while (!isInterrupted()) {
-                    Socket client = serverSocket.accept();
-                    client.setSoTimeout(SOCKET_TIMEOUT_MS);
-                    executor.execute(() -> handleClient(client));
+                selector = Selector.open();
+                serverChannel = ServerSocketChannel.open();
+                serverChannel.configureBlocking(false);
+                serverChannel.socket().setReuseAddress(true);
+                serverChannel.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), listenPort), 50);
+                serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+
+                while (running && !Thread.interrupted()) {
+                    int readyCount = selector.select(1000);
+                    if (readyCount == 0) continue;
+
+                    java.util.Iterator<SelectionKey> keyIterator = selector.selectedKeys().iterator();
+                    while (keyIterator.hasNext()) {
+                        SelectionKey key = keyIterator.next();
+                        keyIterator.remove();
+
+                        if (!key.isValid()) continue;
+
+                        if (key.isAcceptable()) {
+                            handleAccept();
+                        } else if (key.isConnectable()) {
+                            handleConnect(key);
+                        } else if (key.isReadable()) {
+                            handleRead(key);
+                        } else if (key.isWritable()) {
+                            handleWrite(key);
+                        }
+                    }
                 }
             } catch (IOException e) {
-                // Closed
+                // Selector loop terminated
+            } finally {
+                cleanup();
             }
+        }
+
+        private void handleAccept() throws IOException {
+            SocketChannel clientChannel = serverChannel.accept();
+            if (clientChannel == null) return;
+
+            clientChannel.configureBlocking(false);
+            clientChannel.socket().setTcpNoDelay(true);
+
+            PipeContext ctx = new PipeContext();
+            ctx.clientChannel = clientChannel;
+
+            // Connect to proxy
+            SocketChannel proxyChannel = SocketChannel.open();
+            proxyChannel.configureBlocking(false);
+            proxyChannel.socket().setTcpNoDelay(true);
+            proxyChannel.connect(new java.net.InetSocketAddress("127.0.0.1", proxyPort));
+            ctx.proxyChannel = proxyChannel;
+
+            SelectionKey clientKey = clientChannel.register(selector, SelectionKey.OP_READ, ctx);
+            SelectionKey proxyKey = proxyChannel.register(selector, SelectionKey.OP_CONNECT, ctx);
+
+            ctx.clientChannel = clientChannel;
+            ctx.proxyChannel = proxyChannel;
+        }
+
+        private void handleConnect(SelectionKey key) throws IOException {
+            PipeContext ctx = (PipeContext) key.attachment();
+            SocketChannel proxyChannel = ctx.proxyChannel;
+
+            if (proxyChannel.finishConnect()) {
+                key.interestOps(SelectionKey.OP_READ);
+
+                // Send SOCKS5 handshake
+                ctx.clientToProxyBuffer.clear();
+                ctx.clientToProxyBuffer.put(new byte[]{0x05, 0x01, 0x00});
+                ctx.clientToProxyBuffer.flip();
+                ctx.handshakeSent = true;
+            }
+        }
+
+        private void handleRead(SelectionKey key) throws IOException {
+            PipeContext ctx = (PipeContext) key.attachment();
+            SocketChannel channel = (SocketChannel) key.channel();
+
+            if (channel == ctx.proxyChannel) {
+                // Reading from proxy
+                if (!ctx.handshakeComplete) {
+                    // Expecting handshake response
+                    ByteBuffer buffer = ctx.proxyToClientBuffer;
+                    buffer.clear();
+                    buffer.limit(2);
+
+                    int bytesRead = ctx.proxyChannel.read(buffer);
+                    if (bytesRead == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+
+                    if (buffer.position() >= 2) {
+                        buffer.flip();
+                        byte[] resp = new byte[2];
+                        buffer.get(resp);
+                        if (resp[1] != 0x00) {
+                            closeConnection(ctx);
+                            return;
+                        }
+
+                        // Send CONNECT request
+                        java.net.InetAddress addr = java.net.InetAddress.getByName(targetHost);
+                        byte[] ip = addr.getAddress();
+                        byte[] request = new byte[6 + ip.length];
+                        request[0] = 0x05;
+                        request[1] = 0x01; // CONNECT
+                        request[2] = 0x00;
+                        request[3] = (byte) (ip.length == 4 ? 0x01 : 0x04);
+                        System.arraycopy(ip, 0, request, 4, ip.length);
+                        request[4 + ip.length] = (byte) (targetPort >> 8);
+                        request[5 + ip.length] = (byte) (targetPort & 0xFF);
+
+                        ctx.clientToProxyBuffer.clear();
+                        ctx.clientToProxyBuffer.put(request);
+                        ctx.clientToProxyBuffer.flip();
+                        ctx.connectSent = true;
+                        ctx.handshakeComplete = true;
+                    }
+                    return;
+                }
+
+                if (!ctx.connectComplete) {
+                    // Expecting CONNECT response header (4 bytes)
+                    ByteBuffer buffer = ctx.proxyToClientBuffer;
+                    buffer.clear();
+                    buffer.limit(4);
+
+                    int bytesRead = ctx.proxyChannel.read(buffer);
+                    if (bytesRead == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+
+                    if (buffer.position() >= 4) {
+                        buffer.flip();
+                        byte[] replyHeader = new byte[4];
+                        buffer.get(replyHeader);
+                        if (replyHeader[1] != 0x00) {
+                            closeConnection(ctx);
+                            return;
+                        }
+
+                        int atyp = replyHeader[3] & 0xFF;
+                        int addrLen;
+                        if (atyp == 0x01) { // IPv4
+                            addrLen = 4;
+                        } else if (atyp == 0x04) { // IPv6
+                            addrLen = 16;
+                        } else if (atyp == 0x03) { // DOMAIN
+                            // Need to read domain length first
+                            ByteBuffer lenBuffer = ByteBuffer.allocate(1);
+                            int lenRead = ctx.proxyChannel.read(lenBuffer);
+                            if (lenRead == -1) {
+                                closeConnection(ctx);
+                                return;
+                            }
+                            addrLen = lenBuffer.get(0) & 0xFF;
+                        } else {
+                            closeConnection(ctx);
+                            return;
+                        }
+
+                        // Read remaining address bytes and port
+                        int remainingLen = addrLen + 2;
+                        ByteBuffer addrBuffer = ByteBuffer.allocate(remainingLen);
+                        while (addrBuffer.position() < remainingLen) {
+                            int bytesRead2 = ctx.proxyChannel.read(addrBuffer);
+                            if (bytesRead2 == -1) {
+                                closeConnection(ctx);
+                                return;
+                            }
+                        }
+
+                        ctx.connectComplete = true;
+
+                        // Register for data forwarding
+                        ctx.clientChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, ctx);
+                        ctx.proxyChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, ctx);
+                    }
+                    return;
+                }
+
+                // Normal data forwarding from proxy to client
+                ctx.proxyToClientBuffer.clear();
+                int bytesRead = ctx.proxyChannel.read(ctx.proxyToClientBuffer);
+                if (bytesRead == -1) {
+                    closeConnection(ctx);
+                    return;
+                }
+                if (bytesRead > 0) {
+                    ctx.proxyToClientBuffer.flip();
+                    while (ctx.proxyToClientBuffer.hasRemaining()) {
+                        ctx.clientChannel.write(ctx.proxyToClientBuffer);
+                    }
+                }
+            } else if (channel == ctx.clientChannel) {
+                // Reading from client
+                if (!ctx.handshakeComplete || !ctx.connectComplete) {
+                    // Should not happen in normal flow, but handle gracefully
+                    closeConnection(ctx);
+                    return;
+                }
+
+                ctx.clientToProxyBuffer.clear();
+                int bytesRead = ctx.clientChannel.read(ctx.clientToProxyBuffer);
+                if (bytesRead == -1) {
+                    closeConnection(ctx);
+                    return;
+                }
+                if (bytesRead > 0) {
+                    ctx.clientToProxyBuffer.flip();
+                    while (ctx.clientToProxyBuffer.hasRemaining()) {
+                        ctx.proxyChannel.write(ctx.clientToProxyBuffer);
+                    }
+                }
+            }
+        }
+
+        private void handleWrite(SelectionKey key) throws IOException {
+            PipeContext ctx = (PipeContext) key.attachment();
+            SocketChannel channel = (SocketChannel) key.channel();
+
+            if (channel == ctx.proxyChannel && ctx.handshakeSent && !ctx.connectSent) {
+                // Send buffered handshake (already in buffer from handleConnect)
+                ctx.clientToProxyBuffer.flip();
+                while (ctx.clientToProxyBuffer.hasRemaining()) {
+                    int written = ctx.proxyChannel.write(ctx.clientToProxyBuffer);
+                    if (written == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+                }
+                ctx.handshakeSent = false;
+                // Switch to read mode to wait for handshake response
+                key.interestOps(SelectionKey.OP_READ);
+                return;
+            }
+
+            if (channel == ctx.proxyChannel && ctx.connectSent && !ctx.connectComplete) {
+                // Send CONNECT request
+                ctx.clientToProxyBuffer.flip();
+                while (ctx.clientToProxyBuffer.hasRemaining()) {
+                    int written = ctx.proxyChannel.write(ctx.clientToProxyBuffer);
+                    if (written == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+                }
+                ctx.connectSent = false;
+                // Switch to read mode to wait for CONNECT response
+                key.interestOps(SelectionKey.OP_READ);
+                return;
+            }
+
+            // Normal data write operations are handled inline in handleRead
+            // This is just for completeness
+        }
+
+        private void closeConnection(PipeContext ctx) {
+            try {
+                if (ctx.clientChannel != null && ctx.clientChannel.isOpen()) {
+                    ctx.clientChannel.close();
+                }
+            } catch (IOException ignored) {}
+            try {
+                if (ctx.proxyChannel != null && ctx.proxyChannel.isOpen()) {
+                    ctx.proxyChannel.close();
+                }
+            } catch (IOException ignored) {}
+        }
+
+        private void cleanup() {
+            try {
+                if (serverChannel != null && serverChannel.isOpen()) {
+                    serverChannel.close();
+                }
+            } catch (IOException ignored) {}
+            try {
+                if (selector != null && selector.isOpen()) {
+                    selector.close();
+                }
+            } catch (IOException ignored) {}
         }
 
         public void stopForwarder() {
-            interrupt();
-            try {
-                if (serverSocket != null) serverSocket.close();
-            } catch (IOException ignored) {}
-
-            executor.shutdownNow();
-            try {
-                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        private void handleClient(Socket client) {
-            Socket proxy = null;
-            boolean handoffSuccessful = false;
-            try {
-                proxy = new Socket("127.0.0.1", proxyPort);
-                proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
-                InputStream in = proxy.getInputStream();
-                OutputStream out = proxy.getOutputStream();
-
-                // Handshake
-                out.write(new byte[]{0x05, 0x01, 0x00});
-                byte[] handshakeResp = new byte[2];
-                if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) {
-                    return;
-                }
-
-                // Connect
-                InetAddress addr = InetAddress.getByName(targetHost);
-                byte[] ip = addr.getAddress();
-                byte[] request = new byte[6 + ip.length];
-                request[0] = 0x05;
-                request[1] = 0x01; // CONNECT
-                request[2] = 0x00;
-                request[3] = (byte) (ip.length == 4 ? 0x01 : 0x04);
-                java.lang.System.arraycopy(ip, 0, request, 4, ip.length);
-                request[4 + ip.length] = (byte) (targetPort >> 8);
-                request[5 + ip.length] = (byte) (targetPort & 0xFF);
-                out.write(request);
-
-                byte[] replyHeader = new byte[4];
-                if (!readFully(in, replyHeader) || replyHeader[1] != 0x00) {
-                    return;
-                }
-                int atyp = replyHeader[3] & 0xFF;
-                int addrLen;
-                if (atyp == 0x01) { // IPv4
-                    addrLen = 4;
-                } else if (atyp == 0x04) { // IPv6
-                    addrLen = 16;
-                } else if (atyp == 0x03) { // DOMAIN
-                    int domainLen = in.read();
-                    if (domainLen == -1) {
-                        return;
-                    }
-                    addrLen = domainLen;
-                } else {
-                    return;
-                }
-                byte[] replyBody = new byte[addrLen + 2];
-                if (!readFully(in, replyBody)) {
-                    return;
-                }
-
-                // Forwarding
-                final Socket fClient = client;
-                final Socket fProxy = proxy;
-                handoffSuccessful = true;
-                executor.execute(() -> pipe(fClient, fProxy));
-                executor.execute(() -> pipe(fProxy, fClient));
-            } catch (IOException e) {
-                // Ignore
-            } finally {
-                if (!handoffSuccessful) {
-                    try { client.close(); } catch (IOException ignored) {}
-                    if (proxy != null) try { proxy.close(); } catch (IOException ignored) {}
+            running = false;
+            if (selectorThread != null) {
+                selectorThread.interrupt();
+                try {
+                    selectorThread.join(2000);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
                 }
             }
-        }
-
-        private void pipe(Socket s1, Socket s2) {
-            try {
-                InputStream is = s1.getInputStream();
-                OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
-                int n;
-                while ((n = is.read(buffer)) != -1) {
-                    os.write(buffer, 0, n);
-                }
-            } catch (IOException ignored) {}
-            finally {
-                try { s1.close(); } catch (IOException ignored) {}
-                try { s2.close(); } catch (IOException ignored) {}
+            // Wake up selector if blocked
+            if (selector != null) {
+                selector.wakeup();
             }
-        }
-
-        private boolean readFully(InputStream in, byte[] buffer) throws IOException {
-            return readFully(in, buffer, buffer.length);
-        }
-
-        private boolean readFully(InputStream in, byte[] buffer, int expectedLength) throws IOException {
-            int total = 0;
-            while (total < expectedLength) {
-                int read = in.read(buffer, total, expectedLength - total);
-                if (read == -1) {
-                    return false;
-                }
-                total += read;
-            }
-            return true;
+            cleanup();
         }
     }
 }
