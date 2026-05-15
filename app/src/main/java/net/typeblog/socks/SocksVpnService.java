@@ -480,10 +480,14 @@ public class SocksVpnService extends VpnService {
             boolean handshakeComplete;
             boolean connectSent;
             boolean connectComplete;
+            boolean hasPendingClientToProxyData;
+            boolean hasPendingProxyToClientData;
 
             PipeContext() {
                 clientToProxyBuffer = ByteBuffer.allocateDirect(8192);
                 proxyToClientBuffer = ByteBuffer.allocateDirect(8192);
+                hasPendingClientToProxyData = false;
+                hasPendingProxyToClientData = false;
             }
         }
 
@@ -570,13 +574,27 @@ public class SocksVpnService extends VpnService {
             SocketChannel proxyChannel = ctx.proxyChannel;
 
             if (proxyChannel.finishConnect()) {
-                key.interestOps(SelectionKey.OP_READ);
-
                 // Send SOCKS5 handshake
                 ctx.clientToProxyBuffer.clear();
                 ctx.clientToProxyBuffer.put(new byte[]{0x05, 0x01, 0x00});
                 ctx.clientToProxyBuffer.flip();
-                ctx.handshakeSent = true;
+                
+                // Try to send immediately
+                while (ctx.clientToProxyBuffer.hasRemaining()) {
+                    int written = proxyChannel.write(ctx.clientToProxyBuffer);
+                    if (written == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+                    if (written == 0) {
+                        // Buffer full, register for OP_WRITE to retry
+                        key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                        ctx.handshakeSent = true;
+                        return;
+                    }
+                }
+                // Handshake sent successfully, switch to read mode
+                key.interestOps(SelectionKey.OP_READ);
             }
         }
 
@@ -678,13 +696,18 @@ public class SocksVpnService extends VpnService {
                                 closeConnection(ctx);
                                 return;
                             }
+                            if (bytesRead2 == 0) {
+                                // Not enough data yet, wait for more
+                                return;
+                            }
                         }
 
                         ctx.connectComplete = true;
 
-                        // Register for data forwarding
-                        ctx.clientChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, ctx);
-                        ctx.proxyChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, ctx);
+                        // Register for data forwarding - only OP_READ initially
+                        // OP_WRITE will be added only when there's pending data
+                        ctx.clientChannel.register(selector, SelectionKey.OP_READ, ctx);
+                        ctx.proxyChannel.register(selector, SelectionKey.OP_READ, ctx);
                     }
                     return;
                 }
@@ -698,9 +721,22 @@ public class SocksVpnService extends VpnService {
                 }
                 if (bytesRead > 0) {
                     ctx.proxyToClientBuffer.flip();
+                    // Write data and track if there's remaining data
                     while (ctx.proxyToClientBuffer.hasRemaining()) {
-                        ctx.clientChannel.write(ctx.proxyToClientBuffer);
+                        int written = ctx.clientChannel.write(ctx.proxyToClientBuffer);
+                        if (written == -1) {
+                            closeConnection(ctx);
+                            return;
+                        }
+                        if (written == 0) {
+                            // Buffer full, mark pending data and register for OP_WRITE
+                            ctx.hasPendingProxyToClientData = true;
+                            key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                            return;
+                        }
                     }
+                    // All data written successfully
+                    ctx.hasPendingProxyToClientData = false;
                 }
             } else if (channel == ctx.clientChannel) {
                 // Reading from client
@@ -718,9 +754,22 @@ public class SocksVpnService extends VpnService {
                 }
                 if (bytesRead > 0) {
                     ctx.clientToProxyBuffer.flip();
+                    // Write data and track if there's remaining data
                     while (ctx.clientToProxyBuffer.hasRemaining()) {
-                        ctx.proxyChannel.write(ctx.clientToProxyBuffer);
+                        int written = ctx.proxyChannel.write(ctx.clientToProxyBuffer);
+                        if (written == -1) {
+                            closeConnection(ctx);
+                            return;
+                        }
+                        if (written == 0) {
+                            // Buffer full, mark pending data and register for OP_WRITE
+                            ctx.hasPendingClientToProxyData = true;
+                            key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                            return;
+                        }
                     }
+                    // All data written successfully
+                    ctx.hasPendingClientToProxyData = false;
                 }
             }
         }
@@ -729,13 +778,54 @@ public class SocksVpnService extends VpnService {
             PipeContext ctx = (PipeContext) key.attachment();
             SocketChannel channel = (SocketChannel) key.channel();
 
-            if (channel == ctx.proxyChannel && ctx.handshakeSent && !ctx.connectSent) {
-                // Send buffered handshake (already in buffer from handleConnect)
-                ctx.clientToProxyBuffer.flip();
+            // Handle pending client->proxy data
+            if (channel == ctx.proxyChannel && ctx.hasPendingClientToProxyData) {
                 while (ctx.clientToProxyBuffer.hasRemaining()) {
                     int written = ctx.proxyChannel.write(ctx.clientToProxyBuffer);
                     if (written == -1) {
                         closeConnection(ctx);
+                        return;
+                    }
+                    if (written == 0) {
+                        // Buffer still full, keep OP_WRITE registered
+                        return;
+                    }
+                }
+                // All pending data written, switch back to OP_READ only
+                ctx.hasPendingClientToProxyData = false;
+                updateInterestOps(key, ctx);
+                return;
+            }
+
+            // Handle pending proxy->client data
+            if (channel == ctx.clientChannel && ctx.hasPendingProxyToClientData) {
+                while (ctx.proxyToClientBuffer.hasRemaining()) {
+                    int written = ctx.clientChannel.write(ctx.proxyToClientBuffer);
+                    if (written == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+                    if (written == 0) {
+                        // Buffer still full, keep OP_WRITE registered
+                        return;
+                    }
+                }
+                // All pending data written, switch back to OP_READ only
+                ctx.hasPendingProxyToClientData = false;
+                updateInterestOps(key, ctx);
+                return;
+            }
+
+            // Handle handshake send that was deferred due to buffer being full
+            if (channel == ctx.proxyChannel && ctx.handshakeSent && !ctx.connectSent) {
+                while (ctx.clientToProxyBuffer.hasRemaining()) {
+                    int written = ctx.proxyChannel.write(ctx.clientToProxyBuffer);
+                    if (written == -1) {
+                        closeConnection(ctx);
+                        return;
+                    }
+                    if (written == 0) {
+                        // Buffer full, keep OP_WRITE registered and retry next iteration
                         return;
                     }
                 }
@@ -745,13 +835,16 @@ public class SocksVpnService extends VpnService {
                 return;
             }
 
+            // Handle CONNECT request that was deferred due to buffer being full
             if (channel == ctx.proxyChannel && ctx.connectSent && !ctx.connectComplete) {
-                // Send CONNECT request
-                ctx.clientToProxyBuffer.flip();
                 while (ctx.clientToProxyBuffer.hasRemaining()) {
                     int written = ctx.proxyChannel.write(ctx.clientToProxyBuffer);
                     if (written == -1) {
                         closeConnection(ctx);
+                        return;
+                    }
+                    if (written == 0) {
+                        // Buffer full, keep OP_WRITE registered and retry next iteration
                         return;
                     }
                 }
@@ -760,9 +853,15 @@ public class SocksVpnService extends VpnService {
                 key.interestOps(SelectionKey.OP_READ);
                 return;
             }
+        }
 
-            // Normal data write operations are handled inline in handleRead
-            // This is just for completeness
+        private void updateInterestOps(SelectionKey key, PipeContext ctx) {
+            // Determine the correct interest ops based on pending data flags
+            int ops = SelectionKey.OP_READ;
+            if (ctx.hasPendingClientToProxyData || ctx.hasPendingProxyToClientData) {
+                ops |= SelectionKey.OP_WRITE;
+            }
+            key.interestOps(ops);
         }
 
         private void closeConnection(PipeContext ctx) {
