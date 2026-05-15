@@ -4,9 +4,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
@@ -18,10 +20,47 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
 
+    private static class StreamGobbler extends Thread {
+        private final InputStream is;
+
+        StreamGobbler(InputStream is) {
+            this.is = is;
+        }
+
+        @Override
+        public void run() {
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
+                while (br.readLine() != null);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     public static int exec(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-            int ret = p.waitFor();
+            StreamGobbler stdout = new StreamGobbler(p.getInputStream());
+            StreamGobbler stderr = new StreamGobbler(p.getErrorStream());
+            stdout.start();
+            stderr.start();
+
+            long timeout = 30000;
+            long start = java.lang.System.currentTimeMillis();
+            int ret = -1;
+
+            while (true) {
+                try {
+                    ret = p.exitValue();
+                    break;
+                } catch (IllegalThreadStateException e) {
+                    if (java.lang.System.currentTimeMillis() - start > timeout) {
+                        p.destroy();
+                        break;
+                    }
+                    Thread.sleep(200);
+                }
+            }
+
             p.getInputStream().close();
             p.getOutputStream().close();
             p.getErrorStream().close();
@@ -34,7 +73,28 @@ public class Utility {
     public static int exec(String[] cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-            int ret = p.waitFor();
+            StreamGobbler stdout = new StreamGobbler(p.getInputStream());
+            StreamGobbler stderr = new StreamGobbler(p.getErrorStream());
+            stdout.start();
+            stderr.start();
+
+            long timeout = 30000;
+            long start = java.lang.System.currentTimeMillis();
+            int ret = -1;
+
+            while (true) {
+                try {
+                    ret = p.exitValue();
+                    break;
+                } catch (IllegalThreadStateException e) {
+                    if (java.lang.System.currentTimeMillis() - start > timeout) {
+                        p.destroy();
+                        break;
+                    }
+                    Thread.sleep(200);
+                }
+            }
+
             p.getInputStream().close();
             p.getOutputStream().close();
             p.getErrorStream().close();

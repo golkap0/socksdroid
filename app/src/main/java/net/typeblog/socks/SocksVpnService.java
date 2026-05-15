@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Build;
+import android.os.FileObserver;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
@@ -15,6 +16,7 @@ import android.util.Log;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -22,10 +24,15 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -51,6 +58,8 @@ public class SocksVpnService extends VpnService {
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
+    private ExecutorService mExecutor;
+    private final List<Future<?>> mFutures = Collections.synchronizedList(new ArrayList<>());
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -128,14 +137,19 @@ public class SocksVpnService extends VpnService {
 
             mStarting = true;
             final int fd = mInterface.getFd();
-            new Thread(() -> {
+
+            if (mExecutor == null || mExecutor.isShutdown()) {
+                mExecutor = Executors.newFixedThreadPool(coreCount + 5);
+            }
+
+            mFutures.add(mExecutor.submit(() -> {
                 try {
                     start(fd, server, port, username, passwd, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns, dnsPort, ipv6, udpgw,
                             obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
                 } finally {
                     mStarting = false;
                 }
-            }).start();
+            }));
         }
 
         return START_STICKY;
@@ -165,6 +179,22 @@ public class SocksVpnService extends VpnService {
         if (mForwarder != null) {
             mForwarder.stopForwarder();
             mForwarder = null;
+        }
+
+        synchronized (mFutures) {
+            for (Future<?> future : mFutures) {
+                future.cancel(true);
+            }
+            mFutures.clear();
+        }
+
+        if (mExecutor != null) {
+            mExecutor.shutdownNow();
+            try {
+                mExecutor.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            mExecutor = null;
         }
 
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
@@ -302,7 +332,7 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd)).start();
+            mFutures.add(mExecutor.submit(() -> Utility.exec(uzCmd)));
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
@@ -318,7 +348,7 @@ public class SocksVpnService extends VpnService {
         loadCmd[5] = "-tunnel";
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
-        new Thread(() -> Utility.exec(loadCmd)).start();
+        mFutures.add(mExecutor.submit(() -> Utility.exec(loadCmd)));
 
         try {
             Thread.sleep(1000);
@@ -349,26 +379,39 @@ public class SocksVpnService extends VpnService {
             Log.d(TAG, command);
         }
 
+        final String sockPath = getApplicationInfo().dataDir + "/sock_path";
+        final CountDownLatch latch = new CountDownLatch(1);
+        FileObserver observer = new FileObserver(getApplicationInfo().dataDir, FileObserver.CREATE) {
+            @Override
+            public void onEvent(int event, String path) {
+                if ("sock_path".equals(path)) {
+                    latch.countDown();
+                }
+            }
+        };
+        observer.startWatching();
+
         if (Utility.exec(command) != 0) {
+            observer.stopWatching();
             stopMe();
             return;
         }
 
-        // Try to send the Fd through socket.
-        int i = 0;
-        while (i < 5) {
-            if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
-                mRunning = true;
-                return;
+        try {
+            if (new File(sockPath).exists() || latch.await(10, TimeUnit.SECONDS)) {
+                // Try several times as the socket might not be ready immediately after file creation
+                for (int i = 0; i < 5; i++) {
+                    if (System.sendfd(fd, sockPath) != -1) {
+                        mRunning = true;
+                        observer.stopWatching();
+                        return;
+                    }
+                    Thread.sleep(500);
+                }
             }
-
-            i++;
-
-            try {
-                Thread.sleep(1000L * i);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        } catch (InterruptedException ignored) {
+        } finally {
+            observer.stopWatching();
         }
 
         // Should not get here. Must be a failure.
