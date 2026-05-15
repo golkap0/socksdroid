@@ -279,8 +279,8 @@ public class SocksVpnService extends VpnService {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, "127.0.0.1", forwarderPort);
 
-        Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf > /dev/null 2>&1",
-                getApplicationInfo().nativeLibraryDir, getFilesDir()));
+        Utility.exec(new String[]{"sh", "-c", String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf > /dev/null 2>&1",
+                getApplicationInfo().nativeLibraryDir, getFilesDir())});
 
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
@@ -410,12 +410,14 @@ public class SocksVpnService extends VpnService {
             SelectionKey peerKey;
             boolean isRemote;
             State state = State.FORWARDING;
-            ByteBuffer buffer = ByteBuffer.allocate(32768);
+            ByteBuffer inBuffer = ByteBuffer.allocate(32768);
+            ByteBuffer outBuffer = ByteBuffer.allocate(32768);
             boolean closed = false;
 
             Session(boolean isRemote) {
                 this.isRemote = isRemote;
                 if (isRemote) state = State.HANDSHAKE;
+                outBuffer.flip();
             }
         }
 
@@ -482,9 +484,10 @@ public class SocksVpnService extends VpnService {
             Session session = (Session) key.attachment();
             if (remote.finishConnect()) {
                 session.state = State.HANDSHAKE;
-                key.interestOps(SelectionKey.OP_WRITE);
-                session.buffer.put(new byte[]{0x05, 0x01, 0x00});
-                session.buffer.flip();
+                session.outBuffer.clear();
+                session.outBuffer.put(new byte[]{0x05, 0x01, 0x00});
+                session.outBuffer.flip();
+                key.interestOps(SelectionKey.OP_WRITE | SelectionKey.OP_READ);
             }
         }
 
@@ -492,36 +495,38 @@ public class SocksVpnService extends VpnService {
             SocketChannel channel = (SocketChannel) key.channel();
             Session session = (Session) key.attachment();
 
+            if (!session.isRemote && session.state != State.FORWARDING) {
+                Session peerSession = (Session) session.peerKey.attachment();
+                if (peerSession.state != State.FORWARDING) {
+                    key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
+                    return;
+                }
+            }
+
+            int n = channel.read(session.inBuffer);
+            if (n == -1) throw new IOException("EOF");
+
             if (session.isRemote && session.state != State.FORWARDING) {
-                int n = channel.read(session.buffer);
-                if (n == -1) throw new IOException("EOF");
                 handleProtocol(key);
             } else {
                 Session peerSession = (Session) session.peerKey.attachment();
-                if (peerSession.isRemote && peerSession.state != State.FORWARDING) {
-                    key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
-                    return;
-                }
-
-                if (peerSession.buffer.hasRemaining()) {
-                    key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
-                    return;
-                }
-
-                peerSession.buffer.clear();
-                int n = channel.read(peerSession.buffer);
-                if (n == -1) throw new IOException("EOF");
-                peerSession.buffer.flip();
-
-                if (peerSession.buffer.hasRemaining()) {
+                session.inBuffer.flip();
+                if (peerSession.outBuffer.capacity() - peerSession.outBuffer.limit() >= session.inBuffer.remaining()) {
+                    peerSession.outBuffer.compact();
+                    peerSession.outBuffer.put(session.inBuffer);
+                    peerSession.outBuffer.flip();
+                    session.inBuffer.clear();
                     session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_WRITE);
+                } else {
+                    session.inBuffer.compact();
+                    key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
                 }
             }
         }
 
-        private void handleProtocol(SelectionKey key) throws IOException {
-            Session session = (Session) key.attachment();
-            ByteBuffer buf = session.buffer;
+        private void handleProtocol(final SelectionKey key) throws IOException {
+            final Session session = (Session) key.attachment();
+            ByteBuffer buf = session.inBuffer;
             buf.flip();
 
             if (session.state == State.HANDSHAKE) {
@@ -529,13 +534,16 @@ public class SocksVpnService extends VpnService {
                 if (buf.get(1) != 0x00) throw new IOException("Handshake failed");
                 buf.position(buf.position() + 2);
                 session.state = State.CONNECT;
-                byte[] ip = InetAddress.getByName(targetHost).getAddress();
-                buf.clear();
-                buf.put(new byte[]{0x05, 0x01, 0x00, (byte) (ip.length == 4 ? 0x01 : 0x04)});
-                buf.put(ip);
-                buf.putShort((short) targetPort);
-                buf.flip();
-                key.interestOps(SelectionKey.OP_WRITE);
+
+                final byte[] ip = InetAddress.getByName(targetHost).getAddress();
+                synchronized (session.outBuffer) {
+                    session.outBuffer.clear();
+                    session.outBuffer.put(new byte[]{0x05, 0x01, 0x00, (byte) (ip.length == 4 ? 0x01 : 0x04)});
+                    session.outBuffer.put(ip);
+                    session.outBuffer.putShort((short) targetPort);
+                    session.outBuffer.flip();
+                }
+                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
             } else if (session.state == State.CONNECT) {
                 if (buf.remaining() < 4) { buf.compact(); return; }
                 if (buf.get(1) != 0x00) throw new IOException("Connect failed");
@@ -544,26 +552,31 @@ public class SocksVpnService extends VpnService {
                 if (buf.remaining() < needed) { buf.compact(); return; }
                 buf.position(buf.position() + needed);
                 session.state = State.FORWARDING;
-                buf.clear();
-                buf.flip();
-                key.interestOps(SelectionKey.OP_READ);
-                session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_READ);
+
+                Session peerSession = (Session) session.peerKey.attachment();
+                peerSession.outBuffer.compact();
+                peerSession.outBuffer.put(buf);
+                peerSession.outBuffer.flip();
+
+                session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_WRITE | SelectionKey.OP_READ);
+                key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
             }
+            buf.compact();
         }
 
         private void write(SelectionKey key) throws IOException {
             SocketChannel channel = (SocketChannel) key.channel();
             Session session = (Session) key.attachment();
 
-            channel.write(session.buffer);
-            if (!session.buffer.hasRemaining()) {
-                if (session.isRemote && session.state != State.FORWARDING) {
-                    session.buffer.clear();
-                    key.interestOps(SelectionKey.OP_READ);
-                } else {
-                    key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
-                    session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_READ);
+            synchronized (session.outBuffer) {
+                if (session.outBuffer.hasRemaining()) {
+                    channel.write(session.outBuffer);
                 }
+            }
+
+            if (!session.outBuffer.hasRemaining()) {
+                key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_READ);
             }
         }
 
