@@ -615,7 +615,7 @@ public class SocksVpnService extends VpnService {
                         request[1] = 0x01; // CONNECT
                         request[2] = 0x00;
                         request[3] = (byte) (ip.length == 4 ? 0x01 : 0x04);
-                        System.arraycopy(ip, 0, request, 4, ip.length);
+                        java.lang.System.arraycopy(ip, 0, request, 4, ip.length);
                         request[4 + ip.length] = (byte) (targetPort >> 8);
                         request[5 + ip.length] = (byte) (targetPort & 0xFF);
 
