@@ -2,6 +2,7 @@ package net.typeblog.socks.util;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Process;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import net.typeblog.socks.R;
 import net.typeblog.socks.SocksVpnService;
@@ -21,15 +23,22 @@ import static net.typeblog.socks.util.Constants.*;
 
 public class Utility {
 
-    // shared executor for reading process output streams
-    // core and max pool sizes are based on the device's processor count to optimize resource usage
-    // uses a bounded queue and DiscardOldestPolicy to prevent memory exhaustion during command bursts
-    private static final int CPU_COUNT = Runtime.getRuntime().availableProcessors();
+    // Shared executor for reading process output streams
+    // Fixed pool size to prevent excessive thread creation (max 4 threads)
+    // Uses daemon threads so they don't prevent app shutdown
+    // Threads run at background priority to avoid impacting UI responsiveness
+    private static final int MAX_LOG_THREADS = 4;
     private static final ThreadPoolExecutor LOG_EXECUTOR = new ThreadPoolExecutor(
-            Math.max(2, Math.min(CPU_COUNT - 1, 4)),
-            Math.max(4, 2 * CPU_COUNT + 1),
-            60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(100),
+            2,                              // core pool size
+            MAX_LOG_THREADS,                // max pool size (capped at 4)
+            60L, TimeUnit.SECONDS,          // keep-alive time
+            new LinkedBlockingQueue<>(100), // bounded queue
+            runnable -> {
+                Thread thread = new Thread(runnable, "LogReader-" + System.nanoTime());
+                thread.setPriority(Process.THREAD_PRIORITY_BACKGROUND);
+                thread.setDaemon(true);
+                return thread;
+            },
             new ThreadPoolExecutor.DiscardOldestPolicy());
 
     public interface OnLogListener {
@@ -43,22 +52,16 @@ public class Utility {
     public static int exec(String cmd, OnLogListener listener) {
         Process p = null;
         try {
-            p = Runtime.getRuntime().exec(cmd);
+            // Use ProcessBuilder with redirectErrorStream to merge stderr into stdout
+            // This reduces thread usage from 2 to 1 per process and avoids blocking issues
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c", cmd);
+            pb.redirectErrorStream(true);
+            p = pb.start();
+            
             if (listener != null) {
                 final Process fp = p;
                 LOG_EXECUTOR.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            listener.onLog(line);
-                        }
-                    } catch (Exception e) {
-                        // Ignore
-                    }
-                });
-
-                LOG_EXECUTOR.execute(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             listener.onLog(line);
@@ -75,7 +78,6 @@ public class Utility {
             if (p != null) {
                 if (listener == null) {
                     try { p.getInputStream().close(); } catch (Exception ignored) {}
-                    try { p.getErrorStream().close(); } catch (Exception ignored) {}
                 }
                 try { p.getOutputStream().close(); } catch (Exception ignored) {}
             }
@@ -89,22 +91,16 @@ public class Utility {
     public static int exec(String[] cmd, OnLogListener listener) {
         Process p = null;
         try {
-            p = Runtime.getRuntime().exec(cmd);
+            // Use ProcessBuilder with redirectErrorStream to merge stderr into stdout
+            // This reduces thread usage from 2 to 1 per process and avoids blocking issues
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectErrorStream(true);
+            p = pb.start();
+            
             if (listener != null) {
                 final Process fp = p;
                 LOG_EXECUTOR.execute(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getInputStream()))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            listener.onLog(line);
-                        }
-                    } catch (Exception e) {
-                        // Ignore
-                    }
-                });
-
-                LOG_EXECUTOR.execute(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(fp.getErrorStream()))) {
                         String line;
                         while ((line = reader.readLine()) != null) {
                             listener.onLog(line);
@@ -121,7 +117,6 @@ public class Utility {
             if (p != null) {
                 if (listener == null) {
                     try { p.getInputStream().close(); } catch (Exception ignored) {}
-                    try { p.getErrorStream().close(); } catch (Exception ignored) {}
                 }
                 try { p.getOutputStream().close(); } catch (Exception ignored) {}
             }
