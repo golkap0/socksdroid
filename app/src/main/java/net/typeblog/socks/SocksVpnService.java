@@ -41,22 +41,11 @@ public class SocksVpnService extends VpnService {
         public void stop() {
             stopMe();
         }
-
-        @Override
-        public void registerCallback(IVpnServiceCallback cb) {
-            mCallbacks.register(cb);
-        }
-
-        @Override
-        public void unregisterCallback(IVpnServiceCallback cb) {
-            mCallbacks.unregister(cb);
-        }
     }
 
     private static final String TAG = SocksVpnService.class.getSimpleName();
 
     private ParcelFileDescriptor mInterface;
-    private final android.os.RemoteCallbackList<IVpnServiceCallback> mCallbacks = new android.os.RemoteCallbackList<>();
     private volatile boolean mRunning = false;
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
@@ -65,6 +54,9 @@ public class SocksVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
+        if (DEBUG) {
+            Log.d(TAG, "starting");
+        }
 
         if (intent == null) {
             return START_STICKY;
@@ -130,6 +122,9 @@ public class SocksVpnService extends VpnService {
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
         if (mInterface != null) {
+            if (DEBUG)
+                Log.d(TAG, "fd: " + mInterface.getFd());
+
             mStarting = true;
             final int fd = mInterface.getFd();
             new Thread(() -> {
@@ -191,7 +186,6 @@ public class SocksVpnService extends VpnService {
         }
 
         mRunning = false;
-        broadcastState(false);
         stopSelf();
     }
 
@@ -265,9 +259,9 @@ public class SocksVpnService extends VpnService {
     }
 
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
-                       String obfs, String up, String down, int recvWinConn, int recvWin, int instanceCount,
+                       String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
-        int workerInstanceCount = Math.max(1, instanceCount);
+        int workerCoreCount = Math.max(1, coreCount);
 
         // Start DNS forwarder to bypass port 53 blocking
         int forwarderPort = 8092;
@@ -284,7 +278,7 @@ public class SocksVpnService extends VpnService {
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
         String serverPorts = "6000-7750,7751-9500,9501-11225,11251-13000,13001-14750,14751-16500,16501-18250,18251-19999";
-        for (int i = 0; i < workerInstanceCount; i++) {
+        for (int i = 0; i < workerCoreCount; i++) {
             int listenPort = 1080 + i;
             String jsonConfig = String.format(Locale.US,
                     "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
@@ -363,7 +357,6 @@ public class SocksVpnService extends VpnService {
         while (i < 5) {
             if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
                 mRunning = true;
-                broadcastState(true);
                 return;
             }
 
@@ -378,18 +371,6 @@ public class SocksVpnService extends VpnService {
 
         // Should not get here. Must be a failure.
         stopMe();
-    }
-
-    private void broadcastState(boolean running) {
-        int n = mCallbacks.beginBroadcast();
-        for (int i = 0; i < n; i++) {
-            try {
-                mCallbacks.getBroadcastItem(i).onStateChanged(running);
-            } catch (Exception e) {
-                // ignore
-            }
-        }
-        mCallbacks.finishBroadcast();
     }
 
     private static class SocksForwarder extends Thread {
@@ -409,14 +390,13 @@ public class SocksVpnService extends VpnService {
             SelectionKey peerKey;
             boolean isRemote;
             State state = State.FORWARDING;
-            ByteBuffer inBuffer = ByteBuffer.allocate(32768);
-            ByteBuffer outBuffer = ByteBuffer.allocate(32768);
+            ByteBuffer outBuffer = ByteBuffer.allocate(65536);
             boolean closed = false;
 
             Session(boolean isRemote) {
                 this.isRemote = isRemote;
                 if (isRemote) state = State.HANDSHAKE;
-                outBuffer.flip();
+                outBuffer.flip(); // Start ready for reading from (empty)
             }
         }
 
@@ -493,84 +473,69 @@ public class SocksVpnService extends VpnService {
         private void read(SelectionKey key) throws IOException {
             SocketChannel channel = (SocketChannel) key.channel();
             Session session = (Session) key.attachment();
+            Session peerSession = (Session) session.peerKey.attachment();
 
-            if (!session.isRemote && session.state != State.FORWARDING) {
-                Session peerSession = (Session) session.peerKey.attachment();
-                if (peerSession.state != State.FORWARDING) {
-                    key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
-                    return;
-                }
+            if (peerSession.outBuffer.remaining() > 0) {
+                // Peer's outBuffer (where we want to put data) is not yet empty
+                key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
+                return;
             }
 
-            int n = channel.read(session.inBuffer);
+            peerSession.outBuffer.clear();
+            int n = channel.read(peerSession.outBuffer);
             if (n == -1) throw new IOException("EOF");
+            peerSession.outBuffer.flip();
 
             if (session.isRemote && session.state != State.FORWARDING) {
                 handleProtocol(key);
             } else {
-                Session peerSession = (Session) session.peerKey.attachment();
-                session.inBuffer.flip();
-                if (peerSession.outBuffer.capacity() - peerSession.outBuffer.limit() >= session.inBuffer.remaining()) {
-                    peerSession.outBuffer.compact();
-                    peerSession.outBuffer.put(session.inBuffer);
-                    peerSession.outBuffer.flip();
-                    session.inBuffer.clear();
+                if (peerSession.outBuffer.hasRemaining()) {
                     session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_WRITE);
-                } else {
-                    session.inBuffer.compact();
-                    key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
                 }
             }
         }
 
-        private void handleProtocol(final SelectionKey key) throws IOException {
-            final Session session = (Session) key.attachment();
-            ByteBuffer buf = session.inBuffer;
-            buf.flip();
+        private void handleProtocol(SelectionKey key) throws IOException {
+            Session session = (Session) key.attachment();
+            ByteBuffer buf = session.outBuffer;
 
             if (session.state == State.HANDSHAKE) {
-                if (buf.remaining() < 2) { buf.compact(); return; }
+                if (buf.remaining() < 2) return;
                 if (buf.get(1) != 0x00) throw new IOException("Handshake failed");
                 buf.position(buf.position() + 2);
                 session.state = State.CONNECT;
 
-                final byte[] ip = InetAddress.getByName(targetHost).getAddress();
-                synchronized (session.outBuffer) {
-                    session.outBuffer.clear();
-                    session.outBuffer.put(new byte[]{0x05, 0x01, 0x00, (byte) (ip.length == 4 ? 0x01 : 0x04)});
-                    session.outBuffer.put(ip);
-                    session.outBuffer.putShort((short) targetPort);
-                    session.outBuffer.flip();
-                }
-                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                byte[] ip = InetAddress.getByName(targetHost).getAddress();
+                buf.compact(); // Move any leftover data to the beginning
+                buf.clear(); // We'll overwrite it for the CONNECT request
+                buf.put(new byte[]{0x05, 0x01, 0x00, (byte) (ip.length == 4 ? 0x01 : 0x04)});
+                buf.put(ip);
+                buf.putShort((short) targetPort);
+                buf.flip();
+                key.interestOps(SelectionKey.OP_WRITE | SelectionKey.OP_READ);
             } else if (session.state == State.CONNECT) {
-                if (buf.remaining() < 4) { buf.compact(); return; }
+                if (buf.remaining() < 4) return;
                 if (buf.get(1) != 0x00) throw new IOException("Connect failed");
                 int atyp = buf.get(3) & 0xFF;
                 int needed = 4 + (atyp == 0x01 ? 4 : atyp == 0x04 ? 16 : atyp == 0x03 ? (buf.get(4) & 0xFF) + 1 : 0) + 2;
-                if (buf.remaining() < needed) { buf.compact(); return; }
+                if (buf.remaining() < needed) return;
                 buf.position(buf.position() + needed);
                 session.state = State.FORWARDING;
 
-                Session peerSession = (Session) session.peerKey.attachment();
-                peerSession.outBuffer.compact();
-                peerSession.outBuffer.put(buf);
-                peerSession.outBuffer.flip();
-
-                session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_WRITE | SelectionKey.OP_READ);
-                key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                // Trigger any data that was read from client while we were connecting
+                if (buf.hasRemaining()) {
+                    session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_WRITE);
+                }
+                session.peerKey.interestOps(session.peerKey.interestOps() | SelectionKey.OP_READ);
             }
-            buf.compact();
         }
 
         private void write(SelectionKey key) throws IOException {
             SocketChannel channel = (SocketChannel) key.channel();
             Session session = (Session) key.attachment();
 
-            synchronized (session.outBuffer) {
-                if (session.outBuffer.hasRemaining()) {
-                    channel.write(session.outBuffer);
-                }
+            if (session.outBuffer.hasRemaining()) {
+                channel.write(session.outBuffer);
             }
 
             if (!session.outBuffer.hasRemaining()) {

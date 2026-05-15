@@ -12,10 +12,10 @@ Aplikasi menggunakan `StateRunnable` di `ProfileFragment.java` yang berjalan set
 - **Masalah:** Untuk setiap koneksi baru, aplikasi membuat dua thread baru (`pipe(fClient, fProxy)` dan `pipe(fProxy, fClient)`).
 - **Dampak:** Jika ada banyak koneksi (misal membuka web dengan banyak aset), jumlah thread akan melonjak drastis. Hal ini menyebabkan penggunaan memori tinggi dan beban CPU akibat *context switching* antar thread yang sangat sering.
 
-## 3. Konfigurasi Instansi Native (libuz.so)
-Aplikasi memungkinkan pengguna untuk menjalankan beberapa instansi `libuz.so` secara paralel (sebelumnya disebut sebagai `coreCount`, sekarang diperjelas menjadi `instanceCount`).
-- **Analisis:** Menjalankan banyak instansi native secara bersamaan dapat meningkatkan beban kerja scheduler kernel. Meskipun `libuz.so` relatif ringan, setiap proses tetap memiliki overhead memori dan CPU sendiri.
-- **Dampak:** Jika diatur terlalu tinggi, penggunaan CPU dapat meningkat karena manajemen banyak tunnel secara paralel, yang berkontribusi pada suhu perangkat. Namun, ini juga memberikan fleksibilitas untuk load balancing traffic.
+## 3. Proliferasi Proses Native (libuz.so)
+Di `SocksVpnService.start()`, aplikasi mencoba menjalankan beberapa instansi `libuz.so` berdasarkan jumlah core CPU (`workerCoreCount`).
+- **Masalah:** Menjalankan banyak proses native secara bersamaan meningkatkan beban kerja scheduler kernel secara signifikan. Setiap proses memiliki overhead memori dan CPU sendiri.
+- **Dampak:** Penggunaan CPU meningkat tajam karena sinkronisasi antar proses dan manajemen banyak tunnel secara paralel, yang berujung pada panas berlebih.
 
 ## 4. Manajemen Proses Native yang Kurang Optimal (Utility.java)
 Metode `Utility.exec()` menjalankan proses native tetapi tidak menangani aliran output (`stdout`/`stderr`) secara aktif.
