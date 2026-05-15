@@ -30,6 +30,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -129,14 +131,17 @@ public class SocksVpnService extends VpnService {
         if (now - mLastBroadcastTime > 100) {
             mLastBroadcastTime = now;
             int n = mCallbacks.beginBroadcast();
-            for (int i = 0; i < n; i++) {
-                try {
-                    mCallbacks.getBroadcastItem(i).onLogAdded(msg);
-                } catch (Exception e) {
-                    // Ignore
+            try {
+                for (int i = 0; i < n; i++) {
+                    try {
+                        mCallbacks.getBroadcastItem(i).onLogAdded(msg);
+                    } catch (Exception e) {
+                        // Ignore
+                    }
                 }
+            } finally {
+                mCallbacks.finishBroadcast();
             }
-            mCallbacks.finishBroadcast();
         }
     }
 
@@ -475,8 +480,12 @@ public class SocksVpnService extends VpnService {
         private final int proxyPort;
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = Executors.newFixedThreadPool(
-                Math.max(2, Runtime.getRuntime().availableProcessors() / 2));
+        private final ExecutorService executor = new ThreadPoolExecutor(
+                0,
+                Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+                10L, TimeUnit.SECONDS,
+                new java.util.concurrent.SynchronousQueue<>(),
+                new ThreadPoolExecutor.CallerRunsPolicy());
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -598,7 +607,6 @@ public class SocksVpnService extends VpnService {
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
-                    os.flush();
                 }
             } catch (IOException ignored) {}
             finally {
