@@ -7,11 +7,13 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Build;
+import android.os.SystemClock;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteCallbackList;
 import android.text.TextUtils;
 
+import net.typeblog.socks.util.BufferPool;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
@@ -92,6 +94,7 @@ public class SocksVpnService extends VpnService {
     private ScheduledExecutorService mRetryExecutor;
     private final StringBuilder mLogBuffer = new StringBuilder();
     private volatile boolean mLoggingEnabled = false;
+    private volatile long mLastBroadcastTime = 0;
     private final RemoteCallbackList<IVpnServiceCallback> mCallbacks = new RemoteCallbackList<>();
 
     private void updateState(boolean running) {
@@ -122,15 +125,19 @@ public class SocksVpnService extends VpnService {
             mLogBuffer.append(msg).append("\n");
         }
 
-        int n = mCallbacks.beginBroadcast();
-        for (int i = 0; i < n; i++) {
-            try {
-                mCallbacks.getBroadcastItem(i).onLogAdded(msg);
-            } catch (Exception e) {
-                // Ignore
+        long now = SystemClock.elapsedRealtime();
+        if (now - mLastBroadcastTime > 100) {
+            mLastBroadcastTime = now;
+            int n = mCallbacks.beginBroadcast();
+            for (int i = 0; i < n; i++) {
+                try {
+                    mCallbacks.getBroadcastItem(i).onLogAdded(msg);
+                } catch (Exception e) {
+                    // Ignore
+                }
             }
+            mCallbacks.finishBroadcast();
         }
-        mCallbacks.finishBroadcast();
     }
 
     @Override
@@ -461,8 +468,9 @@ public class SocksVpnService extends VpnService {
     }
 
     private class SocksForwarder extends Thread {
+        private static final byte[] SOCKS5_HANDSHAKE = {0x05, 0x01, 0x00};
         private final int listenPort;
-        private final String targetHost;
+        private final InetAddress targetAddr;
         private final int targetPort;
         private final int proxyPort;
         private ServerSocket serverSocket;
@@ -472,7 +480,13 @@ public class SocksVpnService extends VpnService {
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
-            this.targetHost = targetHost;
+            InetAddress addr = null;
+            try {
+                addr = InetAddress.getByName(targetHost);
+            } catch (Exception e) {
+                // Should not happen for IP
+            }
+            this.targetAddr = addr;
             this.targetPort = targetPort;
             this.proxyPort = proxyPort;
         }
@@ -517,15 +531,15 @@ public class SocksVpnService extends VpnService {
                 OutputStream out = proxy.getOutputStream();
 
                 // Handshake
-                out.write(new byte[]{0x05, 0x01, 0x00});
+                out.write(SOCKS5_HANDSHAKE);
                 byte[] handshakeResp = new byte[2];
                 if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) {
                     return;
                 }
 
                 // Connect
-                InetAddress addr = InetAddress.getByName(targetHost);
-                byte[] ip = addr.getAddress();
+                if (targetAddr == null) return;
+                byte[] ip = targetAddr.getAddress();
                 byte[] request = new byte[6 + ip.length];
                 request[0] = 0x05;
                 request[1] = 0x01; // CONNECT
@@ -577,10 +591,10 @@ public class SocksVpnService extends VpnService {
         }
 
         private void pipe(Socket s1, Socket s2) {
+            byte[] buffer = BufferPool.obtain();
             try {
                 InputStream is = s1.getInputStream();
                 OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[65536];
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
@@ -588,6 +602,7 @@ public class SocksVpnService extends VpnService {
                 }
             } catch (IOException ignored) {}
             finally {
+                BufferPool.recycle(buffer);
                 try { s1.close(); } catch (IOException ignored) {}
                 try { s2.close(); } catch (IOException ignored) {}
             }
