@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
 import android.preference.CheckBoxPreference;
 import android.preference.EditTextPreference;
@@ -48,7 +49,35 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private long mLastBindAttemptMs = 0L;
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new VpnServiceConnection(this);
-    private final Runnable mStateRunnable = new StateRunnable(this);
+    private final IVpnServiceCallback mCallback = new VpnServiceCallback(this);
+    private final Handler mHandler = new Handler();
+    private final Runnable mTransitionWatchdog = () -> {
+        mStarting = false;
+        mStopping = false;
+        updateState();
+    };
+
+    private static class VpnServiceCallback extends IVpnServiceCallback.Stub {
+        private final WeakReference<ProfileFragment> mFragment;
+
+        VpnServiceCallback(ProfileFragment fragment) {
+            mFragment = new WeakReference<>(fragment);
+        }
+
+        @Override
+        public void onStateChanged(boolean running) {
+            ProfileFragment fragment = mFragment.get();
+            if (fragment == null || fragment.mSwitch == null) return;
+
+            Activity activity = fragment.getActivity();
+            if (activity != null) {
+                activity.runOnUiThread(() -> {
+                    fragment.mRunning = running;
+                    fragment.updateState();
+                });
+            }
+        }
+    }
 
     private static class VpnServiceConnection implements ServiceConnection {
         private final WeakReference<ProfileFragment> mFragment;
@@ -67,14 +96,13 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             fragment.mBinder = IVpnService.Stub.asInterface(binder);
 
             try {
+                fragment.mBinder.registerCallback(fragment.mCallback);
                 fragment.mRunning = fragment.mBinder.isRunning();
             } catch (Exception e) {
-                e.printStackTrace();
+                // ignore
             }
 
-            if (fragment.mRunning) {
-                fragment.updateState();
-            }
+            fragment.updateState();
         }
 
         @Override
@@ -85,25 +113,11 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             fragment.mBound = false;
             fragment.mBinding = false;
             fragment.mBinder = null;
-        }
-    }
-
-    private static class StateRunnable implements Runnable {
-        private final WeakReference<ProfileFragment> mFragment;
-
-        StateRunnable(ProfileFragment fragment) {
-            mFragment = new WeakReference<>(fragment);
-        }
-
-        @Override
-        public void run() {
-            ProfileFragment fragment = mFragment.get();
-            if (fragment == null || fragment.mSwitch == null) return;
-
+            fragment.mRunning = false;
             fragment.updateState();
-            fragment.mSwitch.postDelayed(this, 1000);
         }
     }
+
     private IVpnService mBinder;
 
     private ListPreference mPrefProfile, mPrefRoutes;
@@ -131,7 +145,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         MenuItem s = menu.findItem(R.id.switch_main);
         mSwitch = s.getActionView().findViewById(R.id.switch_action_button);
         mSwitch.setOnCheckedChangeListener(this);
-        mSwitch.postDelayed(mStateRunnable, 1000);
         checkState();
     }
 
@@ -157,7 +170,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     @Override
     public boolean onPreferenceClick(Preference p) {
-        // TODO: Implement this method
         return false;
     }
 
@@ -284,22 +296,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     @Override
-    public void onResume() {
-        super.onResume();
-        if (mSwitch != null) {
-            mSwitch.postDelayed(mStateRunnable, 1000);
-        }
-    }
-
-    @Override
-    public void onPause() {
-        super.onPause();
-        if (mSwitch != null) {
-            mSwitch.removeCallbacks(mStateRunnable);
-        }
-    }
-
-    @Override
     public void onDestroyView() {
         super.onDestroyView();
         mSwitch = null;
@@ -333,6 +329,13 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     public void onDestroy() {
         super.onDestroy();
         if (mBound) {
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
             getActivity().unbindService(mConnection);
         }
         mBinder = null;
@@ -536,7 +539,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                     String input = e.getText().toString().trim();
                     if (TextUtils.isEmpty(input)) return;
 
-                    String[] lines = input.split("\\n");
+                    String[] lines = input.split("\n");
                     for (String line : lines) {
                         line = line.trim();
                         if (line.startsWith("zivpn://")) {
@@ -601,11 +604,11 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     }
 
     private void checkState() {
-        mRunning = false;
-        mSwitch.setEnabled(false);
-        mSwitch.setOnCheckedChangeListener(null);
+        updateState();
 
         if (mBinder == null && !mBound && !mBinding) {
+            mSwitch.setEnabled(false);
+            mSwitch.setOnCheckedChangeListener(null);
             long now = java.lang.System.currentTimeMillis();
             if (now - mLastBindAttemptMs < BIND_RETRY_INTERVAL_MS) {
                 mSwitch.setEnabled(true);
@@ -635,18 +638,21 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             }
         }
 
+        mSwitch.setOnCheckedChangeListener(null);
         mSwitch.setChecked(mRunning);
-
-        if ((!mStarting && !mStopping) || (mStarting && mRunning) || (mStopping && !mRunning)) {
-            mSwitch.setEnabled(true);
-        }
 
         if (mStarting && mRunning) {
             mStarting = false;
+            mHandler.removeCallbacks(mTransitionWatchdog);
         }
 
         if (mStopping && !mRunning) {
             mStopping = false;
+            mHandler.removeCallbacks(mTransitionWatchdog);
+        }
+
+        if (!mStarting && !mStopping) {
+            mSwitch.setEnabled(true);
         }
 
         mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
@@ -654,6 +660,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     private void startVpn() {
         mStarting = true;
+        mSwitch.setEnabled(false);
+        mHandler.postDelayed(mTransitionWatchdog, 20000);
         Intent i = VpnService.prepare(getActivity());
 
         if (i != null) {
@@ -668,11 +676,13 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             return;
 
         mStopping = true;
+        mSwitch.setEnabled(false);
+        mHandler.postDelayed(mTransitionWatchdog, 20000);
 
         try {
             mBinder.stop();
         } catch (Exception e) {
-            e.printStackTrace();
+            // ignore
         }
 
         mBinder = null;

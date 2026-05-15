@@ -21,8 +21,8 @@ public class Utility {
     public static int exec(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-            consumeStream(p.getInputStream());
-            consumeStream(p.getErrorStream());
+            drainStream(p.getInputStream());
+            drainStream(p.getErrorStream());
             int ret = p.waitFor();
             p.getOutputStream().close();
             return ret;
@@ -34,8 +34,8 @@ public class Utility {
     public static int exec(String[] cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-            consumeStream(p.getInputStream());
-            consumeStream(p.getErrorStream());
+            drainStream(p.getInputStream());
+            drainStream(p.getErrorStream());
             int ret = p.waitFor();
             p.getOutputStream().close();
             return ret;
@@ -44,7 +44,7 @@ public class Utility {
         }
     }
 
-    private static void consumeStream(final InputStream is) {
+    private static void drainStream(final InputStream is) {
         new Thread(() -> {
             try {
                 byte[] buffer = new byte[1024];
@@ -82,10 +82,9 @@ public class Utility {
                 // If standard kill failed, try kill -9
                 Runtime.getRuntime().exec(new String[]{"kill", "-9", String.valueOf(pid)}).waitFor();
             }
-            if(!file.delete())
-                Log.w(TAG, "failed to delete pidfile");
+            file.delete();
         } catch (Exception e) {
-            e.printStackTrace();
+            // ignore
         }
     }
 
@@ -110,8 +109,7 @@ public class Utility {
         File f = new File(context.getFilesDir() + "/pdnsd.conf");
 
         if (f.exists()) {
-            if(!f.delete())
-                Log.w(TAG, "failed to delete pdnsd.conf");
+            f.delete();
         }
 
         try {
@@ -120,18 +118,15 @@ public class Utility {
             out.flush();
             out.close();
         } catch (Exception e) {
-            e.printStackTrace();
+            // ignore
         }
 
         File cache = new File(context.getFilesDir() + "/pdnsd.cache");
 
         if (!cache.exists()) {
             try {
-                if(!cache.createNewFile())
-                    Log.w(TAG, "failed to create pdnsd.cache");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+                cache.createNewFile();
+            } catch (Exception ignored) {}
         }
     }
 
