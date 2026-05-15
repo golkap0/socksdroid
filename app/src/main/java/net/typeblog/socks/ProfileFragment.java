@@ -69,10 +69,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             }
         }
 
-        @Override
-        public void onLogAdded(String line) {
-            // Handled in MainActivity
-        }
     }
 
     private static class VpnServiceConnection implements ServiceConnection {
@@ -158,12 +154,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             return true;
         } else if (id == R.id.prof_export) {
             exportProfile();
-            return true;
-        } else if (id == R.id.drawer_open) {
-            DrawerLayout drawer = getActivity().findViewById(R.id.drawer_layout);
-            if (drawer != null) {
-                drawer.openDrawer(android.view.Gravity.START);
-            }
             return true;
         } else {
             return super.onOptionsItemSelected(item);

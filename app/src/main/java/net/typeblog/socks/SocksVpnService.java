@@ -16,20 +16,18 @@ import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
@@ -44,30 +42,6 @@ public class SocksVpnService extends VpnService {
         @Override
         public void stop() {
             stopMe();
-        }
-
-        @Override
-        public String getLogs() {
-            synchronized (mLogBuffer) {
-                return mLogBuffer.toString();
-            }
-        }
-
-        @Override
-        public void clearLogs() {
-            synchronized (mLogBuffer) {
-                mLogBuffer.setLength(0);
-            }
-        }
-
-        @Override
-        public void setLoggingEnabled(boolean enabled) {
-            mLoggingEnabled = enabled;
-        }
-
-        @Override
-        public boolean isLoggingEnabled() {
-            return mLoggingEnabled;
         }
 
         @Override
@@ -92,8 +66,6 @@ public class SocksVpnService extends VpnService {
     private final IBinder mBinder = new VpnBinder();
     private SocksForwarder mForwarder;
     private ScheduledExecutorService mRetryExecutor;
-    private final StringBuilder mLogBuffer = new StringBuilder();
-    private volatile boolean mLoggingEnabled = true;
     private final RemoteCallbackList<IVpnServiceCallback> mCallbacks = new RemoteCallbackList<>();
 
     private void updateState(boolean running) {
@@ -107,33 +79,6 @@ public class SocksVpnService extends VpnService {
             }
         }
         mCallbacks.finishBroadcast();
-    }
-
-    private void log(String msg) {
-        if (mLoggingEnabled) {
-            synchronized (mLogBuffer) {
-                if (mLogBuffer.length() > 50000) {
-                    // Optimized pruning: find a newline near the 10k mark to preserve log integrity
-                    int pruneIdx = mLogBuffer.indexOf("\n", 10000);
-                    if (pruneIdx != -1) {
-                        mLogBuffer.delete(0, pruneIdx + 1);
-                    } else {
-                        mLogBuffer.delete(0, 10000);
-                    }
-                }
-                mLogBuffer.append(msg).append("\n");
-            }
-
-            int n = mCallbacks.beginBroadcast();
-            for (int i = 0; i < n; i++) {
-                try {
-                    mCallbacks.getBroadcastItem(i).onLogAdded(msg);
-                } catch (Exception e) {
-                    // Ignore
-                }
-            }
-            mCallbacks.finishBroadcast();
-        }
     }
 
     @Override
@@ -344,9 +289,6 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
-        int maxRecommendedCores = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-        int workerCoreCount = Math.max(1, Math.min(coreCount, maxRecommendedCores));
-
         // Start DNS forwarder to bypass port 53 blocking
         int forwarderPort = 8092;
         int loadBalancerPort = 7777;
@@ -356,37 +298,32 @@ public class SocksVpnService extends VpnService {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, "127.0.0.1", forwarderPort);
 
-        Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
+        Utility.exec(String.format(Locale.US, "sh -c '%s/libpdnsd.so -c %s/pdnsd.conf > /dev/null 2>&1'",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
 
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
         String serverPorts = "6000-7750,7751-9500,9501-11225,11251-13000,13001-14750,14751-16500,16501-18250,18251-19999";
-        for (int i = 0; i < workerCoreCount; i++) {
-            int listenPort = 1080 + i;
-            String jsonConfig = String.format(Locale.US,
-                    "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
-                    tunHost, serverPorts, obfs, tunUser, listenPort);
+        int listenPort = 1080;
+        String jsonConfig = String.format(Locale.US,
+                "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
+                tunHost, serverPorts, obfs, tunUser, listenPort);
 
-            if (!"0".equals(up)) {
-                jsonConfig += String.format(Locale.US, ",\"up\":\"%s\"", up);
-            }
-            if (!"0".equals(down)) {
-                jsonConfig += String.format(Locale.US, ",\"down\":\"%s\"", down);
-            }
-
-            jsonConfig += String.format(Locale.US, ",\"recvwindowconn\":%d,\"recvwindow\":%d}",
-                    recvWinConn, recvWin);
-
-            String[] uzCmd = {
-                    getApplicationInfo().nativeLibraryDir + "/libuz.so",
-                    "-s", obfs,
-                    "--config", jsonConfig
-            };
-
-            new Thread(() -> Utility.exec(uzCmd, line -> log("libuz: " + line))).start();
-            tunnels.append("127.0.0.1:").append(listenPort).append(" ");
+        if (!"0".equals(up)) {
+            jsonConfig += String.format(Locale.US, ",\"up\":\"%s\"", up);
         }
+        if (!"0".equals(down)) {
+            jsonConfig += String.format(Locale.US, ",\"down\":\"%s\"", down);
+        }
+
+        jsonConfig += String.format(Locale.US, ",\"recvwindowconn\":%d,\"recvwindow\":%d}",
+                recvWinConn, recvWin);
+
+        String uzCmd = String.format(Locale.US, "sh -c '%s/libuz.so -s %s --config %s > /dev/null 2>&1'",
+                getApplicationInfo().nativeLibraryDir + "/libuz.so", obfs, jsonConfig.replace("\"", "\\\""));
+
+        new Thread(() -> Utility.exec(uzCmd)).start();
+        tunnels.append("127.0.0.1:").append(listenPort).append(" ");
 
         // Start libload.so
         int loadPort = 7777;
@@ -400,15 +337,10 @@ public class SocksVpnService extends VpnService {
         loadCmd[5] = "-tunnel";
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
+        String loadCmdStr = getApplicationInfo().nativeLibraryDir + "/libload.so -lhost 127.0.0.1 -lport " + loadPort + " -tunnel " + tunnels.toString().trim();
         CountDownLatch loadLatch = new CountDownLatch(1);
         new Thread(() -> {
-            Utility.exec(loadCmd, line -> {
-                log("libload: " + line);
-                if (line.contains("Listening")) {
-                    loadLatch.countDown();
-                }
-            });
-            // Also countdown if the process exits unexpectedly
+            Utility.exec("sh -c '" + loadCmdStr + " > /dev/null 2>&1'");
             loadLatch.countDown();
         }).start();
 
@@ -438,7 +370,7 @@ public class SocksVpnService extends VpnService {
             command += " --udpgw-remote-server-addr " + udpgw;
         }
 
-        if (Utility.exec(command) != 0) {
+        if (Utility.exec("sh -c '" + command + " > /dev/null 2>&1'") != 0) {
             stopMe();
             return;
         }
@@ -470,12 +402,17 @@ public class SocksVpnService extends VpnService {
         private final String targetHost;
         private final int targetPort;
         private final int proxyPort;
-        private ServerSocket serverSocket;
-        private static final int SOCKET_TIMEOUT_MS = 30_000;
-        private final ExecutorService executor = new ThreadPoolExecutor(4, 8,
-                60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(100),
-                new ThreadPoolExecutor.DiscardOldestPolicy());
+        private Selector selector;
+        private ServerSocketChannel serverChannel;
+        private volatile boolean running = true;
+
+        private class Session {
+            SocketChannel client;
+            SocketChannel proxy;
+            ByteBuffer clientBuffer = ByteBuffer.allocateDirect(16384);
+            ByteBuffer proxyBuffer = ByteBuffer.allocateDirect(16384);
+            int state = 0; // 0: Handshake, 1: Connect, 2: Reply, 3: Forwarding
+        }
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
             this.listenPort = listenPort;
@@ -487,132 +424,198 @@ public class SocksVpnService extends VpnService {
         @Override
         public void run() {
             try {
-                serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
-                while (!isInterrupted()) {
-                    Socket client = serverSocket.accept();
-                    client.setSoTimeout(SOCKET_TIMEOUT_MS);
-                    executor.execute(() -> handleClient(client));
+                selector = Selector.open();
+                serverChannel = ServerSocketChannel.open();
+                serverChannel.bind(new InetSocketAddress("127.0.0.1", listenPort));
+                serverChannel.configureBlocking(false);
+                serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+
+                while (running) {
+                    if (selector.select(1000) == 0) continue;
+                    Iterator<SelectionKey> it = selector.selectedKeys().iterator();
+                    while (it.hasNext()) {
+                        SelectionKey key = it.next();
+                        it.remove();
+                        if (!key.isValid()) continue;
+
+                        if (key.isAcceptable()) {
+                            accept();
+                        } else if (key.isConnectable()) {
+                            finishConnect(key);
+                        } else if (key.isReadable()) {
+                            read(key);
+                        } else if (key.isWritable()) {
+                            write(key);
+                        }
+                    }
                 }
-            } catch (IOException e) {
-                // Closed
+            } catch (IOException ignored) {
+            } finally {
+                stopForwarder();
             }
+        }
+
+        private void accept() throws IOException {
+            SocketChannel client = serverChannel.accept();
+            client.configureBlocking(false);
+            Session session = new Session();
+            session.client = client;
+            client.register(selector, SelectionKey.OP_READ, session);
+
+            SocketChannel proxy = SocketChannel.open();
+            proxy.configureBlocking(false);
+            session.proxy = proxy;
+            if (proxy.connect(new InetSocketAddress("127.0.0.1", proxyPort))) {
+                onProxyConnected(session);
+            } else {
+                proxy.register(selector, SelectionKey.OP_CONNECT, session);
+            }
+        }
+
+        private void finishConnect(SelectionKey key) throws IOException {
+            SocketChannel channel = (SocketChannel) key.channel();
+            Session session = (Session) key.attachment();
+            if (channel.finishConnect()) {
+                onProxyConnected(session);
+            }
+        }
+
+        private void onProxyConnected(Session session) throws IOException {
+            session.proxy.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, session);
+            session.client.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, session);
+            // Start SOCKS5 handshake - write to proxy, so put in clientBuffer
+            session.clientBuffer.put(new byte[]{0x05, 0x01, 0x00});
+            session.state = 0;
+            updateInterests(session);
+        }
+
+        private void read(SelectionKey key) throws IOException {
+            SocketChannel channel = (SocketChannel) key.channel();
+            Session session = (Session) key.attachment();
+            ByteBuffer buffer = (channel == session.client) ? session.clientBuffer : session.proxyBuffer;
+
+            int n = channel.read(buffer);
+            if (n == -1) {
+                closeSession(session);
+                return;
+            }
+
+            if (session.state < 3) {
+                handleControl(session);
+            }
+            updateInterests(session);
+        }
+
+        private void write(SelectionKey key) throws IOException {
+            SocketChannel channel = (SocketChannel) key.channel();
+            Session session = (Session) key.attachment();
+            ByteBuffer buffer = (channel == session.client) ? session.proxyBuffer : session.clientBuffer;
+
+            buffer.flip();
+            channel.write(buffer);
+            buffer.compact();
+
+            if (session.state < 3) {
+                handleControl(session);
+            }
+            updateInterests(session);
+        }
+
+        private void handleControl(Session session) throws IOException {
+            boolean changed = true;
+            while (changed && session.state < 3) {
+                changed = false;
+                if (session.state == 0) { // Handshake response
+                    session.proxyBuffer.flip();
+                    if (session.proxyBuffer.remaining() >= 2) {
+                        byte ver = session.proxyBuffer.get();
+                        byte method = session.proxyBuffer.get();
+                        if (ver == 0x05 && method == 0x00) {
+                            session.proxyBuffer.compact();
+                            // Send Connect request to proxy, so put in clientBuffer
+                            InetAddress addr = InetAddress.getByName(targetHost);
+                            byte[] ip = addr.getAddress();
+                            session.clientBuffer.put(new byte[]{0x05, 0x01, 0x00, (byte) (ip.length == 4 ? 0x01 : 0x04)});
+                            session.clientBuffer.put(ip);
+                            session.clientBuffer.putShort((short) targetPort);
+                            session.state = 1;
+                            changed = true;
+                        } else {
+                            closeSession(session);
+                            return;
+                        }
+                    } else {
+                        session.proxyBuffer.compact();
+                    }
+                } else if (session.state == 1) { // Connect response header
+                    session.proxyBuffer.flip();
+                    if (session.proxyBuffer.remaining() >= 4) {
+                        session.proxyBuffer.mark();
+                        byte ver = session.proxyBuffer.get();
+                        byte rep = session.proxyBuffer.get();
+                        session.proxyBuffer.get(); // rsv
+                        byte atyp = session.proxyBuffer.get();
+                        if (ver == 0x05 && rep == 0x00) {
+                            session.state = 2;
+                            session.proxyBuffer.reset();
+                            changed = true;
+                        } else {
+                            closeSession(session);
+                            return;
+                        }
+                    } else {
+                        session.proxyBuffer.compact();
+                    }
+                } else if (session.state == 2) { // Connect response body
+                    // Already have 4 bytes at least from state 1 reset
+                    if (session.proxyBuffer.remaining() >= 4) {
+                        session.proxyBuffer.mark();
+                        session.proxyBuffer.position(session.proxyBuffer.position() + 3);
+                        byte atyp = session.proxyBuffer.get();
+                        int addrLen = (atyp == 0x01) ? 4 : (atyp == 0x04) ? 16 : (atyp == 0x03) ? (session.proxyBuffer.get() & 0xFF) : -1;
+                        if (addrLen != -1 && session.proxyBuffer.remaining() >= addrLen + 2) {
+                            session.proxyBuffer.position(session.proxyBuffer.position() + addrLen + 2);
+                            session.proxyBuffer.compact();
+                            session.state = 3; // Forwarding
+                            changed = true;
+                        } else {
+                            session.proxyBuffer.reset();
+                            session.proxyBuffer.compact();
+                        }
+                    } else {
+                        session.proxyBuffer.compact();
+                    }
+                }
+            }
+        }
+
+        private void updateInterests(Session session) {
+            if (!session.client.isOpen() || !session.proxy.isOpen()) return;
+
+            int clientOps = 0;
+            if (session.clientBuffer.hasRemaining()) clientOps |= SelectionKey.OP_READ;
+            if (session.proxyBuffer.position() > 0) clientOps |= SelectionKey.OP_WRITE;
+
+            int proxyOps = 0;
+            if (session.proxyBuffer.hasRemaining()) proxyOps |= SelectionKey.OP_READ;
+            if (session.clientBuffer.position() > 0) proxyOps |= SelectionKey.OP_WRITE;
+
+            try {
+                session.client.register(selector, clientOps, session);
+                session.proxy.register(selector, proxyOps, session);
+            } catch (Exception ignored) {}
+        }
+
+        private void closeSession(Session session) {
+            try { session.client.close(); } catch (IOException ignored) {}
+            try { session.proxy.close(); } catch (IOException ignored) {}
         }
 
         public void stopForwarder() {
-            interrupt();
-            try {
-                if (serverSocket != null) serverSocket.close();
-            } catch (IOException ignored) {}
-
-            executor.shutdownNow();
-            try {
-                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        private void handleClient(Socket client) {
-            Socket proxy = null;
-            boolean handoffSuccessful = false;
-            try {
-                proxy = new Socket("127.0.0.1", proxyPort);
-                proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
-                InputStream in = proxy.getInputStream();
-                OutputStream out = proxy.getOutputStream();
-
-                // Handshake
-                out.write(new byte[]{0x05, 0x01, 0x00});
-                byte[] handshakeResp = new byte[2];
-                if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) {
-                    return;
-                }
-
-                // Connect
-                InetAddress addr = InetAddress.getByName(targetHost);
-                byte[] ip = addr.getAddress();
-                byte[] request = new byte[6 + ip.length];
-                request[0] = 0x05;
-                request[1] = 0x01; // CONNECT
-                request[2] = 0x00;
-                request[3] = (byte) (ip.length == 4 ? 0x01 : 0x04);
-                java.lang.System.arraycopy(ip, 0, request, 4, ip.length);
-                request[4 + ip.length] = (byte) (targetPort >> 8);
-                request[5 + ip.length] = (byte) (targetPort & 0xFF);
-                out.write(request);
-
-                byte[] replyHeader = new byte[4];
-                if (!readFully(in, replyHeader) || replyHeader[1] != 0x00) {
-                    return;
-                }
-                int atyp = replyHeader[3] & 0xFF;
-                int addrLen;
-                if (atyp == 0x01) { // IPv4
-                    addrLen = 4;
-                } else if (atyp == 0x04) { // IPv6
-                    addrLen = 16;
-                } else if (atyp == 0x03) { // DOMAIN
-                    int domainLen = in.read();
-                    if (domainLen == -1) {
-                        return;
-                    }
-                    addrLen = domainLen;
-                } else {
-                    return;
-                }
-                byte[] replyBody = new byte[addrLen + 2];
-                if (!readFully(in, replyBody)) {
-                    return;
-                }
-
-                // Forwarding
-                final Socket fClient = client;
-                final Socket fProxy = proxy;
-                handoffSuccessful = true;
-                executor.execute(() -> pipe(fClient, fProxy));
-                executor.execute(() -> pipe(fProxy, fClient));
-            } catch (IOException e) {
-                // Ignore
-            } finally {
-                if (!handoffSuccessful) {
-                    try { client.close(); } catch (IOException ignored) {}
-                    if (proxy != null) try { proxy.close(); } catch (IOException ignored) {}
-                }
-            }
-        }
-
-        private void pipe(Socket s1, Socket s2) {
-            try {
-                InputStream is = s1.getInputStream();
-                OutputStream os = s2.getOutputStream();
-                byte[] buffer = new byte[16384];
-                int n;
-                while ((n = is.read(buffer)) != -1) {
-                    os.write(buffer, 0, n);
-                }
-            } catch (IOException ignored) {}
-            finally {
-                try { s1.close(); } catch (IOException ignored) {}
-                try { s2.close(); } catch (IOException ignored) {}
-            }
-        }
-
-        private boolean readFully(InputStream in, byte[] buffer) throws IOException {
-            return readFully(in, buffer, buffer.length);
-        }
-
-        private boolean readFully(InputStream in, byte[] buffer, int expectedLength) throws IOException {
-            int total = 0;
-            while (total < expectedLength) {
-                int read = in.read(buffer, total, expectedLength - total);
-                if (read == -1) {
-                    return false;
-                }
-                total += read;
-            }
-            return true;
+            running = false;
+            if (selector != null) selector.wakeup();
+            try { if (serverChannel != null) serverChannel.close(); } catch (IOException ignored) {}
+            try { if (selector != null) selector.close(); } catch (IOException ignored) {}
         }
     }
 }

@@ -81,12 +81,6 @@
             android:inputType="number"
             android:singleLine="true"/>
 
-        <EditTextPreference
-            android:key="core_count"
-            android:title="@string/core_count"
-            android:inputType="number"
-            android:singleLine="true"/>
-
     </PreferenceCategory>
 
     <PreferenceCategory
