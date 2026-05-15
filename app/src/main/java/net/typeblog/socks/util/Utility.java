@@ -2,6 +2,7 @@ package net.typeblog.socks.util;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.util.Log;
 
 import java.io.BufferedReader;
@@ -11,6 +12,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.List;
 
 import net.typeblog.socks.R;
@@ -30,75 +32,92 @@ public class Utility {
         @Override
         public void run() {
             try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
-                while (br.readLine() != null);
+                while (!isInterrupted() && br.readLine() != null);
             } catch (Exception ignored) {
+            } finally {
+                if (isInterrupted()) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
 
-    public static int exec(String cmd) {
-        try {
-            Process p = Runtime.getRuntime().exec(cmd);
-            StreamGobbler stdout = new StreamGobbler(p.getInputStream());
-            StreamGobbler stderr = new StreamGobbler(p.getErrorStream());
-            stdout.start();
-            stderr.start();
+    private static int execInternal(Object cmd, long timeoutMs) throws IOException {
+        Process p;
+        if (cmd instanceof String) {
+            p = Runtime.getRuntime().exec((String) cmd);
+        } else if (cmd instanceof String[]) {
+            p = Runtime.getRuntime().exec((String[]) cmd);
+        } else {
+            throw new IllegalArgumentException("cmd must be String or String[]");
+        }
 
-            long timeout = 30000;
-            long start = java.lang.System.currentTimeMillis();
-            int ret = -1;
+        StreamGobbler stdout = new StreamGobbler(p.getInputStream());
+        StreamGobbler stderr = new StreamGobbler(p.getErrorStream());
+        stdout.start();
+        stderr.start();
 
-            while (true) {
-                try {
-                    ret = p.exitValue();
-                    break;
-                } catch (IllegalThreadStateException e) {
-                    if (java.lang.System.currentTimeMillis() - start > timeout) {
+        int ret = -1;
+        long start = java.lang.System.currentTimeMillis();
+
+        while (true) {
+            try {
+                ret = p.exitValue();
+                break;
+            } catch (IllegalThreadStateException e) {
+                if (timeoutMs > 0 && java.lang.System.currentTimeMillis() - start > timeoutMs) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        p.destroyForcibly();
+                    } else {
                         p.destroy();
-                        break;
                     }
+                    break;
+                }
+                try {
                     Thread.sleep(200);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
+        }
 
-            p.getInputStream().close();
-            p.getOutputStream().close();
-            p.getErrorStream().close();
-            return ret;
+        try {
+            stdout.join(1000);
+            if (stdout.isAlive()) stdout.interrupt();
+            stderr.join(1000);
+            if (stderr.isAlive()) stderr.interrupt();
+        } catch (InterruptedException e) {
+            stdout.interrupt();
+            stderr.interrupt();
+            Thread.currentThread().interrupt();
+        }
+
+        p.getInputStream().close();
+        p.getOutputStream().close();
+        p.getErrorStream().close();
+        return ret;
+    }
+
+    public static int exec(String cmd) {
+        return exec(cmd, 30000);
+    }
+
+    public static int exec(String cmd, long timeoutMs) {
+        try {
+            return execInternal(cmd, timeoutMs);
         } catch (Exception e) {
             return -1;
         }
     }
 
     public static int exec(String[] cmd) {
+        return exec(cmd, 30000);
+    }
+
+    public static int exec(String[] cmd, long timeoutMs) {
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
-            StreamGobbler stdout = new StreamGobbler(p.getInputStream());
-            StreamGobbler stderr = new StreamGobbler(p.getErrorStream());
-            stdout.start();
-            stderr.start();
-
-            long timeout = 30000;
-            long start = java.lang.System.currentTimeMillis();
-            int ret = -1;
-
-            while (true) {
-                try {
-                    ret = p.exitValue();
-                    break;
-                } catch (IllegalThreadStateException e) {
-                    if (java.lang.System.currentTimeMillis() - start > timeout) {
-                        p.destroy();
-                        break;
-                    }
-                    Thread.sleep(200);
-                }
-            }
-
-            p.getInputStream().close();
-            p.getOutputStream().close();
-            p.getErrorStream().close();
-            return ret;
+            return execInternal(cmd, timeoutMs);
         } catch (Exception e) {
             return -1;
         }
