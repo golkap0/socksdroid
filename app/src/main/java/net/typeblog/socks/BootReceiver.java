@@ -20,11 +20,6 @@ public class BootReceiver extends BroadcastReceiver {
             Profile p = new ProfileManager(context).getDefault();
 
             if (p.autoConnect() && VpnService.prepare(context) == null) {
-
-                if (DEBUG) {
-                    Log.d(TAG, "starting VPN service on boot");
-                }
-
                 Utility.startVpn(context, p);
             }
         }

@@ -48,7 +48,29 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private long mLastBindAttemptMs = 0L;
     private static final long BIND_RETRY_INTERVAL_MS = 10_000L;
     private final ServiceConnection mConnection = new VpnServiceConnection(this);
-    private final Runnable mStateRunnable = new StateRunnable(this);
+    private final IVpnServiceCallback mCallback = new VpnServiceCallback(this);
+
+    private static class VpnServiceCallback extends IVpnServiceCallback.Stub {
+        private final WeakReference<ProfileFragment> mFragment;
+
+        VpnServiceCallback(ProfileFragment fragment) {
+            mFragment = new WeakReference<>(fragment);
+        }
+
+        @Override
+        public void onStateChanged(boolean running) {
+            ProfileFragment fragment = mFragment.get();
+            if (fragment == null || fragment.mSwitch == null) return;
+
+            Activity activity = fragment.getActivity();
+            if (activity != null) {
+                activity.runOnUiThread(() -> {
+                    fragment.mRunning = running;
+                    fragment.updateState();
+                });
+            }
+        }
+    }
 
     private static class VpnServiceConnection implements ServiceConnection {
         private final WeakReference<ProfileFragment> mFragment;
@@ -72,9 +94,13 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                 e.printStackTrace();
             }
 
-            if (fragment.mRunning) {
-                fragment.updateState();
+            try {
+                fragment.mBinder.registerCallback(fragment.mCallback);
+            } catch (Exception e) {
+                e.printStackTrace();
             }
+
+            fragment.updateState();
         }
 
         @Override
@@ -85,23 +111,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             fragment.mBound = false;
             fragment.mBinding = false;
             fragment.mBinder = null;
-        }
-    }
-
-    private static class StateRunnable implements Runnable {
-        private final WeakReference<ProfileFragment> mFragment;
-
-        StateRunnable(ProfileFragment fragment) {
-            mFragment = new WeakReference<>(fragment);
-        }
-
-        @Override
-        public void run() {
-            ProfileFragment fragment = mFragment.get();
-            if (fragment == null || fragment.mSwitch == null) return;
-
+            fragment.mRunning = false;
             fragment.updateState();
-            fragment.mSwitch.postDelayed(this, 1000);
         }
     }
     private IVpnService mBinder;
@@ -131,7 +142,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         MenuItem s = menu.findItem(R.id.switch_main);
         mSwitch = s.getActionView().findViewById(R.id.switch_action_button);
         mSwitch.setOnCheckedChangeListener(this);
-        mSwitch.postDelayed(mStateRunnable, 1000);
         checkState();
     }
 
@@ -283,21 +293,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         }
     }
 
-    @Override
-    public void onResume() {
-        super.onResume();
-        if (mSwitch != null) {
-            mSwitch.postDelayed(mStateRunnable, 1000);
-        }
-    }
-
-    @Override
-    public void onPause() {
-        super.onPause();
-        if (mSwitch != null) {
-            mSwitch.removeCallbacks(mStateRunnable);
-        }
-    }
 
     @Override
     public void onDestroyView() {
@@ -333,6 +328,13 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     public void onDestroy() {
         super.onDestroy();
         if (mBound) {
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
             getActivity().unbindService(mConnection);
         }
         mBinder = null;

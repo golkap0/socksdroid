@@ -41,11 +41,22 @@ public class SocksVpnService extends VpnService {
         public void stop() {
             stopMe();
         }
+
+        @Override
+        public void registerCallback(IVpnServiceCallback cb) {
+            mCallbacks.register(cb);
+        }
+
+        @Override
+        public void unregisterCallback(IVpnServiceCallback cb) {
+            mCallbacks.unregister(cb);
+        }
     }
 
     private static final String TAG = SocksVpnService.class.getSimpleName();
 
     private ParcelFileDescriptor mInterface;
+    private final android.os.RemoteCallbackList<IVpnServiceCallback> mCallbacks = new android.os.RemoteCallbackList<>();
     private volatile boolean mRunning = false;
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
@@ -54,9 +65,6 @@ public class SocksVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
-        if (DEBUG) {
-            Log.d(TAG, "starting");
-        }
 
         if (intent == null) {
             return START_STICKY;
@@ -122,9 +130,6 @@ public class SocksVpnService extends VpnService {
         configure(name, route, perApp, appBypass, appList, ipv6, TextUtils.isEmpty(dns) ? "9.9.9.9" : dns);
 
         if (mInterface != null) {
-            if (DEBUG)
-                Log.d(TAG, "fd: " + mInterface.getFd());
-
             mStarting = true;
             final int fd = mInterface.getFd();
             new Thread(() -> {
@@ -185,7 +190,9 @@ public class SocksVpnService extends VpnService {
             mInterface = null;
         }
 
+        boolean wasRunning = mRunning;
         mRunning = false;
+        if (wasRunning) broadcastState(false);
         stopSelf();
     }
 
@@ -272,7 +279,7 @@ public class SocksVpnService extends VpnService {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, "127.0.0.1", forwarderPort);
 
-        Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
+        Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf > /dev/null 2>&1",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
 
         // Start libuz.so instances
@@ -295,9 +302,9 @@ public class SocksVpnService extends VpnService {
                     recvWinConn, recvWin);
 
             String[] uzCmd = {
-                    getApplicationInfo().nativeLibraryDir + "/libuz.so",
-                    "-s", obfs,
-                    "--config", jsonConfig
+                    "sh", "-c",
+                    String.format(Locale.US, "%s/libuz.so -s %s --config '%s' > /dev/null 2>&1",
+                            getApplicationInfo().nativeLibraryDir, obfs, jsonConfig)
             };
 
             new Thread(() -> Utility.exec(uzCmd)).start();
@@ -307,16 +314,18 @@ public class SocksVpnService extends VpnService {
         // Start libload.so
         int loadPort = 7777;
         String[] tunnelList = tunnels.toString().trim().split(" ");
-        String[] loadCmd = new String[6 + tunnelList.length];
-        loadCmd[0] = getApplicationInfo().nativeLibraryDir + "/libload.so";
-        loadCmd[1] = "-lhost";
-        loadCmd[2] = "127.0.0.1";
-        loadCmd[3] = "-lport";
-        loadCmd[4] = String.valueOf(loadPort);
-        loadCmd[5] = "-tunnel";
-        java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
+        StringBuilder loadCmdStr = new StringBuilder();
+        loadCmdStr.append(getApplicationInfo().nativeLibraryDir).append("/libload.so")
+                .append(" -lhost 127.0.0.1")
+                .append(" -lport ").append(loadPort)
+                .append(" -tunnel ");
+        for (String t : tunnelList) {
+            loadCmdStr.append(t).append(" ");
+        }
+        loadCmdStr.append("> /dev/null 2>&1");
 
-        new Thread(() -> Utility.exec(loadCmd)).start();
+        final String loadCmd = loadCmdStr.toString();
+        new Thread(() -> Utility.exec(new String[]{"sh", "-c", loadCmd})).start();
 
         try {
             Thread.sleep(1000);
@@ -328,7 +337,7 @@ public class SocksVpnService extends VpnService {
                         + " --socks-server-addr 127.0.0.1:%d"
                         + " --tunfd %d"
                         + " --tunmtu 1500"
-                        + " --loglevel 3"
+                        + " --loglevel 0"
                         + " --pid %s/tun2socks.pid"
                         + " --sock %s/sock_path"
                 , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
@@ -343,11 +352,9 @@ public class SocksVpnService extends VpnService {
             command += " --udpgw-remote-server-addr " + udpgw;
         }
 
-        if (DEBUG) {
-            Log.d(TAG, command);
-        }
+        command += " > /dev/null 2>&1";
 
-        if (Utility.exec(command) != 0) {
+        if (Utility.exec(new String[]{"sh", "-c", command}) != 0) {
             stopMe();
             return;
         }
@@ -357,6 +364,7 @@ public class SocksVpnService extends VpnService {
         while (i < 5) {
             if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
                 mRunning = true;
+                broadcastState(true);
                 return;
             }
 
@@ -371,6 +379,18 @@ public class SocksVpnService extends VpnService {
 
         // Should not get here. Must be a failure.
         stopMe();
+    }
+
+    private void broadcastState(boolean running) {
+        int n = mCallbacks.beginBroadcast();
+        for (int i = 0; i < n; i++) {
+            try {
+                mCallbacks.getBroadcastItem(i).onStateChanged(running);
+            } catch (Exception e) {
+                // ignore
+            }
+        }
+        mCallbacks.finishBroadcast();
     }
 
     private static class SocksForwarder extends Thread {
