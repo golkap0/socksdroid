@@ -190,9 +190,8 @@ public class SocksVpnService extends VpnService {
             mInterface = null;
         }
 
-        boolean wasRunning = mRunning;
         mRunning = false;
-        if (wasRunning) broadcastState(false);
+        broadcastState(false);
         stopSelf();
     }
 
