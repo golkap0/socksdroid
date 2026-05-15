@@ -39,32 +39,35 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private Switch mSwitch;
     private boolean mRunning = false;
     private boolean mStarting = false, mStopping = false;
+    private final IVpnServiceCallback mCallback = new IVpnServiceCallback.Stub() {
+        @Override
+        public void onStateChanged(boolean running) {
+            if (mSwitch != null) {
+                mSwitch.post(() -> {
+                    mRunning = running;
+                    updateState();
+                });
+            }
+        }
+    };
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName p1, IBinder binder) {
             mBinder = IVpnService.Stub.asInterface(binder);
 
             try {
+                mBinder.registerCallback(mCallback);
                 mRunning = mBinder.isRunning();
             } catch (Exception e) {
                 e.printStackTrace();
             }
 
-            if (mRunning) {
-                updateState();
-            }
+            updateState();
         }
 
         @Override
         public void onServiceDisconnected(ComponentName p1) {
             mBinder = null;
-        }
-    };
-    private final Runnable mStateRunnable = new Runnable() {
-        @Override
-        public void run() {
-            updateState();
-            mSwitch.postDelayed(this, 1000);
         }
     };
     private IVpnService mBinder;
@@ -94,7 +97,6 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         MenuItem s = menu.findItem(R.id.switch_main);
         mSwitch = s.getActionView().findViewById(R.id.switch_action_button);
         mSwitch.setOnCheckedChangeListener(this);
-        mSwitch.postDelayed(mStateRunnable, 1000);
         checkState();
     }
 
@@ -542,6 +544,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         mStopping = true;
 
         try {
+            mBinder.unregisterCallback(mCallback);
             mBinder.stop();
         } catch (Exception e) {
             e.printStackTrace();

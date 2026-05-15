@@ -4,9 +4,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
@@ -18,9 +21,30 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
 
+    private static class StreamGobbler implements Runnable {
+        private final InputStream is;
+
+        StreamGobbler(InputStream is) {
+            this.is = is;
+        }
+
+        @Override
+        public void run() {
+            try {
+                InputStreamReader isr = new InputStreamReader(is);
+                BufferedReader br = new BufferedReader(isr);
+                while (br.readLine() != null);
+            } catch (IOException e) {
+                // Ignore
+            }
+        }
+    }
+
     public static int exec(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            new Thread(new StreamGobbler(p.getInputStream())).start();
+            new Thread(new StreamGobbler(p.getErrorStream())).start();
 
             return p.waitFor();
         } catch (Exception e) {
@@ -31,6 +55,8 @@ public class Utility {
     public static int exec(String[] cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            new Thread(new StreamGobbler(p.getInputStream())).start();
+            new Thread(new StreamGobbler(p.getErrorStream())).start();
 
             return p.waitFor();
         } catch (Exception e) {
