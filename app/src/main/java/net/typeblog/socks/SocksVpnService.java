@@ -74,7 +74,7 @@ public class SocksVpnService extends VpnService {
 
         final String name = intent.getStringExtra(INTENT_NAME);
         final String server = intent.getStringExtra(INTENT_SERVER);
-        final int port = intent.getIntExtra(INTENT_PORT, 1080);
+        final int port = intent.getIntExtra(INTENT_PORT, 7777);
         final String username = intent.getStringExtra(INTENT_USERNAME);
         final String passwd = intent.getStringExtra(INTENT_PASSWORD);
         final String route = intent.getStringExtra(INTENT_ROUTE);
@@ -91,8 +91,8 @@ public class SocksVpnService extends VpnService {
         final String obfs = intent.getStringExtra(INTENT_OBFS_KEY);
         final String up = intent.getStringExtra(INTENT_UP_LIMIT);
         final String down = intent.getStringExtra(INTENT_DOWN_LIMIT);
-        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 262144);
-        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 4194304);
+        final int recvWinConn = intent.getIntExtra(INTENT_RECV_WIN_CONN, 131072);
+        final int recvWin = intent.getIntExtra(INTENT_RECV_WIN, 327680);
         final int coreCount = intent.getIntExtra(INTENT_CORE_COUNT, 4);
         final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST);
         final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER);
@@ -307,7 +307,7 @@ public class SocksVpnService extends VpnService {
         String command = String.format(Locale.US,
                 "%s/libtun2socks.so --netif-ipaddr 26.26.26.2 --netif-netmask 255.255.255.0"
                         + " --socks-server-addr 127.0.0.1:%d --tunfd %d --tunmtu 1500"
-                        + " --loglevel 3 --pid %s/tun2socks.pid --sock %s/sock_path", 
+                        + " --loglevel 0 --pid %s/tun2socks.pid --sock %s/sock_path", 
                 getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
 
         if (ipv6) command += " --netif-ip6addr fdfe:dcba:9876::2";
