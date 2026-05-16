@@ -15,11 +15,20 @@ import android.util.Log;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static net.typeblog.socks.util.Constants.*;
 import static net.typeblog.socks.BuildConfig.DEBUG;
@@ -40,11 +49,13 @@ public class SocksVpnService extends VpnService {
     private static final String TAG = SocksVpnService.class.getSimpleName();
 
     private ParcelFileDescriptor mInterface;
-    private boolean mRunning = false;
+    private volatile boolean mRunning = false;
+    private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
 
-    // FIX: Melacak proses native yang berjalan agar tidak jadi proses Zombie
+    // Tracker untuk mencegah proses/thread Zombie
     private final List<Process> mNativeDaemons = Collections.synchronizedList(new ArrayList<>());
+    private SocksForwarder mForwarder; // DNS Forwarder lokal
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -54,11 +65,10 @@ public class SocksVpnService extends VpnService {
         }
 
         if (intent == null) {
-            // FIX: Gunakan NOT_STICKY agar OS tidak memaksakan hidup service dengan intent kosong
-            return START_NOT_STICKY; 
+            return START_NOT_STICKY; // Cegah restart service kosong oleh sistem
         }
 
-        if (mRunning) {
+        if (mRunning || mStarting) {
             return START_STICKY;
         }
 
@@ -68,8 +78,11 @@ public class SocksVpnService extends VpnService {
         final String username = intent.getStringExtra(INTENT_USERNAME);
         final String passwd = intent.getStringExtra(INTENT_PASSWORD);
         final String route = intent.getStringExtra(INTENT_ROUTE);
-        final String dns = intent.getStringExtra(INTENT_DNS);
-        final int dnsPort = intent.getIntExtra(INTENT_DNS_PORT, 53);
+        
+        // Ambil pengaturan DNS dari profil
+        final String dns = intent.getStringExtra(INTENT_DNS) != null ? intent.getStringExtra(INTENT_DNS) : "8.8.8.8";
+        final int dnsPort = intent.getIntExtra(INTENT_DNS_PORT, 53); // Sekarang port 53 sangat AMAN
+
         final boolean perApp = intent.getBooleanExtra(INTENT_PER_APP, false);
         final boolean appBypass = intent.getBooleanExtra(INTENT_APP_BYPASS, false);
         final String[] appList = intent.getStringArrayExtra(INTENT_APP_LIST);
@@ -84,7 +97,7 @@ public class SocksVpnService extends VpnService {
         final String tunHost = intent.getStringExtra(INTENT_TUNNEL_HOST);
         final String tunUser = intent.getStringExtra(INTENT_TUNNEL_USER);
 
-        // Notifications on Oreo and above need a channel
+        // Notifikasi Android O+
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= 26) {
             String NOTIFICATION_CHANNEL_ID = "net.typeblog.socks";
@@ -97,14 +110,12 @@ public class SocksVpnService extends VpnService {
             builder = new Notification.Builder(this);
         }
 
-        // Create the notification
         int NOTIFICATION_ID = 1;
         int intentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             intentFlags |= PendingIntent.FLAG_IMMUTABLE;
         }
-        PendingIntent contentIntent;
-        contentIntent = PendingIntent.getActivity(this, 0,
+        PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
                 new Intent(this, MainActivity.class), intentFlags);
         startForeground(NOTIFICATION_ID, builder
                 .setContentTitle(getString(R.string.notify_title))
@@ -114,17 +125,23 @@ public class SocksVpnService extends VpnService {
                 .setContentIntent(contentIntent)
                 .build());
 
-        // Create an fd.
-        configure(name, route, perApp, appBypass, appList, ipv6);
-
-        if (DEBUG)
-            Log.d(TAG, "fd: " + mInterface.getFd());
+        // Setup Virtual Network (TUN)
+        configure(name, route, perApp, appBypass, appList, ipv6, dns);
 
         if (mInterface != null) {
-            // FIX: Jalankan start() di thread terpisah agar Main Thread (UI) tidak Freeze/ANR
+            if (DEBUG) Log.d(TAG, "fd: " + mInterface.getFd());
+
+            mStarting = true;
+            final int fd = mInterface.getFd();
+            
+            // Eksekusi proses berat di Background agar Main Thread / UI tidak Freeze
             new Thread(() -> {
-                start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
-                        obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+                try {
+                    start(fd, server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
+                            obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+                } finally {
+                    mStarting = false;
+                }
             }).start();
         }
 
@@ -151,7 +168,13 @@ public class SocksVpnService extends VpnService {
     private void stopMe() {
         stopForeground(true);
 
-        // FIX: Hancurkan proses secara paksa (Mencegah Zombie proses yang makan baterai)
+        // 1. Matikan Local SOCKS DNS Forwarder
+        if (mForwarder != null) {
+            mForwarder.stopForwarder();
+            mForwarder = null;
+        }
+
+        // 2. Hancurkan proses Native secara bersih agar tidak ada Zombie (Hemat Baterai)
         for (Process p : mNativeDaemons) {
             if (p != null) p.destroy();
         }
@@ -160,30 +183,33 @@ public class SocksVpnService extends VpnService {
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // Fallback untuk berjaga-jaga
+        // Fallback pkill
         Utility.exec("pkill -9 -f libuz.so");
         Utility.exec("pkill -9 -f libload.so");
         Utility.exec("pkill -9 -f libpdnsd.so");
         Utility.exec("pkill -9 -f libtun2socks.so");
 
-        try {
-            if (mInterface != null) {
+        // 3. Tutup antarmuka VPN
+        if (mInterface != null) {
+            try {
                 System.jniclose(mInterface.getFd());
                 mInterface.close();
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-        } catch (Exception e) {
-            e.printStackTrace();
+            mInterface = null;
         }
 
+        mRunning = false;
         stopSelf();
     }
 
-    private void configure(String name, String route, boolean perApp, boolean bypass, String[] apps, boolean ipv6) {
+    private void configure(String name, String route, boolean perApp, boolean bypass, String[] apps, boolean ipv6, String dns) {
         Builder b = new Builder();
         b.setMtu(1500)
                 .setSession(name)
                 .addAddress("26.26.26.1", 24)
-                .addDnsServer("8.8.8.8");
+                .addDnsServer(dns); // Arahkan DNS OS ke DNS Pilihan User
 
         if (ipv6) {
             b.addAddress("fdfe:dcba:9876::1", 126)
@@ -192,8 +218,7 @@ public class SocksVpnService extends VpnService {
 
         Routes.addRoutes(this, b, route);
 
-        b.addDnsServer("8.8.8.8");
-        b.addRoute("8.8.8.8", 32);
+        b.addRoute(dns, 32);
 
         if (!perApp) {
             try {
@@ -202,29 +227,21 @@ public class SocksVpnService extends VpnService {
                 e.printStackTrace();
             }
         } else {
+            if (apps == null) apps = new String[0];
             if (bypass) {
                 try {
                     b.addDisallowedApplication("net.typeblog.socks");
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-
                 for (String p : apps) {
                     if (TextUtils.isEmpty(p)) continue;
-                    try {
-                        b.addDisallowedApplication(p.trim());
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    try { b.addDisallowedApplication(p.trim()); } catch (Exception e) {}
                 }
             } else {
                 for (String p : apps) {
                     if (TextUtils.isEmpty(p) || p.trim().equals("net.typeblog.socks")) continue;
-                    try {
-                        b.addAllowedApplication(p.trim());
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    try { b.addAllowedApplication(p.trim()); } catch (Exception e) {}
                 }
             }
         }
@@ -235,15 +252,23 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
-        // Start DNS daemon first
-        Utility.makePdnsdConf(this, dns, dnsPort);
+        
+        int forwarderPort = 8092;
+        int loadPort = 7777;
 
-        // FIX: Simpan track dari native process (libpdnsd)
+        // 1. Jalankan DNS Local SOCKS Forwarder
+        // Mengirim request dari pdnsd -> local loadBalancer (7777)
+        mForwarder = new SocksForwarder(forwarderPort, dns, dnsPort, loadPort);
+        mForwarder.start();
+
+        // 2. Jalankan pdnsd (DNS Resolver)
+        // Arahkan output pdnsd agar ditangkap oleh Forwarder lokal kita (127.0.0.1:8092)
+        Utility.makePdnsdConf(this, "127.0.0.1", forwarderPort);
         Process pdnsd = Utility.startDaemon(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
         if (pdnsd != null) mNativeDaemons.add(pdnsd);
 
-        // Start libuz.so instances
+        // 3. Jalankan libuz (Core Workers)
         StringBuilder tunnels = new StringBuilder();
         String serverPorts = "6000-7750,7751-9500,9501-11225,11251-13000,13001-14750,14751-16500,16501-18250,18251-19999";
         for (int i = 0; i < coreCount; i++) {
@@ -252,75 +277,44 @@ public class SocksVpnService extends VpnService {
                     "{\"server\":\"%s:%s\",\"obfs\":\"%s\",\"auth\":\"%s\",\"socks5\":{\"listen\":\"127.0.0.1:%d\"},\"insecure\":true",
                     tunHost, serverPorts, obfs, tunUser, listenPort);
 
-            if (!"0".equals(up)) {
-                jsonConfig += String.format(Locale.US, ",\"up\":\"%s\"", up);
-            }
-            if (!"0".equals(down)) {
-                jsonConfig += String.format(Locale.US, ",\"down\":\"%s\"", down);
-            }
+            if (!"0".equals(up)) jsonConfig += String.format(Locale.US, ",\"up\":\"%s\"", up);
+            if (!"0".equals(down)) jsonConfig += String.format(Locale.US, ",\"down\":\"%s\"", down);
 
-            jsonConfig += String.format(Locale.US, ",\"recvwindowconn\":%d,\"recvwindow\":%d}",
-                    recvWinConn, recvWin);
+            jsonConfig += String.format(Locale.US, ",\"recvwindowconn\":%d,\"recvwindow\":%d}", recvWinConn, recvWin);
 
-            String[] uzCmd = {
-                    getApplicationInfo().nativeLibraryDir + "/libuz.so",
-                    "-s", obfs,
-                    "--config", jsonConfig
-            };
-
-            // FIX: Simpan track dari proses libuz (Hindari raw thread)
+            String[] uzCmd = { getApplicationInfo().nativeLibraryDir + "/libuz.so", "-s", obfs, "--config", jsonConfig };
+            
             Process pUz = Utility.startDaemon(uzCmd);
             if (pUz != null) mNativeDaemons.add(pUz);
-            
+
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
-        // Start libload.so
-        int loadPort = 7777;
+        // 4. Jalankan Load Balancer (libload)
         String[] tunnelList = tunnels.toString().trim().split(" ");
         String[] loadCmd = new String[6 + tunnelList.length];
         loadCmd[0] = getApplicationInfo().nativeLibraryDir + "/libload.so";
-        loadCmd[1] = "-lhost";
-        loadCmd[2] = "127.0.0.1";
-        loadCmd[3] = "-lport";
-        loadCmd[4] = String.valueOf(loadPort);
+        loadCmd[1] = "-lhost"; loadCmd[2] = "127.0.0.1";
+        loadCmd[3] = "-lport"; loadCmd[4] = String.valueOf(loadPort);
         loadCmd[5] = "-tunnel";
-        java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
+        System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
-        // FIX: Simpan track libload.so
         Process pLoad = Utility.startDaemon(loadCmd);
         if (pLoad != null) mNativeDaemons.add(pLoad);
 
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException ignored) {}
+        try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
 
+        // 5. Jalankan tun2socks
         String command = String.format(Locale.US,
-                "%s/libtun2socks.so --netif-ipaddr 26.26.26.2"
-                        + " --netif-netmask 255.255.255.0"
-                        + " --socks-server-addr 127.0.0.1:%d"
-                        + " --tunfd %d"
-                        + " --tunmtu 1500"
-                        + " --loglevel 3"
-                        + " --pid %s/tun2socks.pid"
-                        + " --sock %s/sock_path"
-                , getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
+                "%s/libtun2socks.so --netif-ipaddr 26.26.26.2 --netif-netmask 255.255.255.0"
+                        + " --socks-server-addr 127.0.0.1:%d --tunfd %d --tunmtu 1500"
+                        + " --loglevel 3 --pid %s/tun2socks.pid --sock %s/sock_path", 
+                getApplicationInfo().nativeLibraryDir, loadPort, fd, getFilesDir(), getApplicationInfo().dataDir);
 
-        if (ipv6) {
-            command += " --netif-ip6addr fdfe:dcba:9876::2";
-        }
+        if (ipv6) command += " --netif-ip6addr fdfe:dcba:9876::2";
+        command += " --dnsgw 26.26.26.1:8091"; // DNS ditangkap dan diarahkan ke pdnsd
+        if (udpgw != null) command += " --udpgw-remote-server-addr " + udpgw;
 
-        command += " --dnsgw 26.26.26.1:8091";
-
-        if (udpgw != null) {
-            command += " --udpgw-remote-server-addr " + udpgw;
-        }
-
-        if (DEBUG) {
-            Log.d(TAG, command);
-        }
-
-        // FIX: Hapus Utility.exec yang blocking dan gantikan tracking libtun2socks
         Process pTun = Utility.startDaemon(command);
         if (pTun != null) {
             mNativeDaemons.add(pTun);
@@ -329,23 +323,156 @@ public class SocksVpnService extends VpnService {
             return;
         }
 
-        // Try to send the Fd through socket.
+        // Injeksi FD ke dalam lokal Socket
         int i = 0;
         while (i < 5) {
             if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
                 mRunning = true;
                 return;
             }
-
             i++;
+            try { Thread.sleep(1000L * i); } catch (Exception e) {}
+        }
+        stopMe();
+    }
 
+    // =========================================================================================
+    // INNER CLASS: SOCKS FORWARDER (Efisiensi Baterai Tinggi)
+    // =========================================================================================
+    private static class SocksForwarder extends Thread {
+        private final int listenPort;
+        private final String targetHost;
+        private final int targetPort;
+        private final int proxyPort;
+        private ServerSocket serverSocket;
+        private static final int SOCKET_TIMEOUT_MS = 30_000;
+        
+        // Membatasi thread secara dinamis untuk menghemat CPU & RAM
+        private final ExecutorService executor = Executors.newFixedThreadPool(
+                Math.max(2, Runtime.getRuntime().availableProcessors())
+        );
+
+        public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
+            this.listenPort = listenPort;
+            this.targetHost = targetHost;
+            this.targetPort = targetPort;
+            this.proxyPort = proxyPort;
+        }
+
+        @Override
+        public void run() {
             try {
-                Thread.sleep(1000L * i);
-            } catch (Exception e) {
-                e.printStackTrace();
+                // Binding ke localhost
+                serverSocket = new ServerSocket(listenPort, 50, InetAddress.getByName("127.0.0.1"));
+                while (!isInterrupted()) {
+                    // CPU akan "Sleep" disini menunggu traffic, tidak boros baterai
+                    Socket client = serverSocket.accept(); 
+                    client.setSoTimeout(SOCKET_TIMEOUT_MS);
+                    executor.execute(() -> handleClient(client));
+                }
+            } catch (IOException e) {
+                // Server ditutup dengan sengaja
             }
         }
 
-        stopMe();
+        public void stopForwarder() {
+            interrupt();
+            try {
+                if (serverSocket != null) serverSocket.close();
+            } catch (IOException ignored) {}
+
+            // Matikan ThreadPool secara agresif agar tidak jadi proses zombie
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private void handleClient(Socket client) {
+            Socket proxy = null;
+            boolean handoffSuccessful = false;
+            try {
+                proxy = new Socket("127.0.0.1", proxyPort);
+                proxy.setSoTimeout(SOCKET_TIMEOUT_MS);
+                InputStream in = proxy.getInputStream();
+                OutputStream out = proxy.getOutputStream();
+
+                // 1. SOCKS5 Handshake
+                out.write(new byte[]{0x05, 0x01, 0x00});
+                byte[] handshakeResp = new byte[2];
+                if (!readFully(in, handshakeResp) || handshakeResp[1] != 0x00) return;
+
+                // 2. Kirim Tujuan Koneksi (Target DNS)
+                byte[] ip = InetAddress.getByName(targetHost).getAddress();
+                byte[] request = new byte[6 + ip.length];
+                request[0] = 0x05; request[1] = 0x01; request[2] = 0x00; request[3] = 0x01; // IPv4
+                System.arraycopy(ip, 0, request, 4, ip.length);
+                request[4 + ip.length] = (byte) (targetPort >> 8);
+                request[5 + ip.length] = (byte) (targetPort & 0xFF);
+                out.write(request);
+
+                // 3. Baca respon persetujuan Proxy
+                byte[] replyHeader = new byte[4];
+                if (!readFully(in, replyHeader) || replyHeader[1] != 0x00) return;
+                
+                int atyp = replyHeader[3] & 0xFF;
+                int addrLen = (atyp == 0x01) ? 4 : (atyp == 0x04) ? 16 : 0;
+                if (atyp == 0x03) addrLen = in.read(); // DOMAIN
+                if (addrLen <= 0) return;
+                
+                byte[] replyBody = new byte[addrLen + 2];
+                if (!readFully(in, replyBody)) return;
+
+                // 4. Terhubung! Salurkan data bolak-balik
+                final Socket fClient = client;
+                final Socket fProxy = proxy;
+                handoffSuccessful = true;
+                
+                executor.execute(() -> pipe(fClient, fProxy));
+                executor.execute(() -> pipe(fProxy, fClient));
+
+            } catch (IOException e) {
+                // Wajar, error jaringan
+            } finally {
+                // Jika gagal handshake, langsung tutup bersih
+                if (!handoffSuccessful) {
+                    try { client.close(); } catch (IOException ignored) {}
+                    if (proxy != null) try { proxy.close(); } catch (IOException ignored) {}
+                }
+            }
+        }
+
+        private void pipe(Socket inputSocket, Socket outputSocket) {
+            try (InputStream is = inputSocket.getInputStream();
+                 OutputStream os = outputSocket.getOutputStream()) {
+                byte[] buffer = new byte[16384]; // Alokasi buffer 16KB stabil
+                int n;
+                // Read adalah Blocking-IO (Tidur jika tidak ada data) - CPU idle (Baterai aman)
+                while ((n = is.read(buffer)) != -1) {
+                    os.write(buffer, 0, n);
+                    os.flush();
+                }
+            } catch (IOException ignored) {
+            } finally {
+                // Tutup jalur pipa bersih
+                try { inputSocket.close(); } catch (IOException ignored) {}
+                try { outputSocket.close(); } catch (IOException ignored) {}
+            }
+        }
+
+        private boolean readFully(InputStream in, byte[] buffer) throws IOException {
+            int total = 0;
+            int expected = buffer.length;
+            while (total < expected) {
+                int read = in.read(buffer, total, expected - total);
+                if (read == -1) return false;
+                total += read;
+            }
+            return true;
+        }
     }
 }
