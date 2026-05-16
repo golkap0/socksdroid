@@ -15,6 +15,9 @@ import android.util.Log;
 import net.typeblog.socks.util.Routes;
 import net.typeblog.socks.util.Utility;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -40,6 +43,9 @@ public class SocksVpnService extends VpnService {
     private boolean mRunning = false;
     private final IBinder mBinder = new VpnBinder();
 
+    // FIX: Melacak proses native yang berjalan agar tidak jadi proses Zombie
+    private final List<Process> mNativeDaemons = Collections.synchronizedList(new ArrayList<>());
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
@@ -48,7 +54,8 @@ public class SocksVpnService extends VpnService {
         }
 
         if (intent == null) {
-            return START_STICKY;
+            // FIX: Gunakan NOT_STICKY agar OS tidak memaksakan hidup service dengan intent kosong
+            return START_NOT_STICKY; 
         }
 
         if (mRunning) {
@@ -113,9 +120,13 @@ public class SocksVpnService extends VpnService {
         if (DEBUG)
             Log.d(TAG, "fd: " + mInterface.getFd());
 
-        if (mInterface != null)
-            start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
-                    obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+        if (mInterface != null) {
+            // FIX: Jalankan start() di thread terpisah agar Main Thread (UI) tidak Freeze/ANR
+            new Thread(() -> {
+                start(mInterface.getFd(), server, port, username, passwd, dns, dnsPort, ipv6, udpgw,
+                        obfs, up, down, recvWinConn, recvWin, coreCount, tunHost, tunUser);
+            }).start();
+        }
 
         return START_STICKY;
     }
@@ -134,25 +145,32 @@ public class SocksVpnService extends VpnService {
     @Override
     public void onDestroy() {
         super.onDestroy();
-
         stopMe();
     }
 
     private void stopMe() {
         stopForeground(true);
 
+        // FIX: Hancurkan proses secara paksa (Mencegah Zombie proses yang makan baterai)
+        for (Process p : mNativeDaemons) {
+            if (p != null) p.destroy();
+        }
+        mNativeDaemons.clear();
+
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // Kill libuz.so and libload.so
+        // Fallback untuk berjaga-jaga
         Utility.exec("pkill -9 -f libuz.so");
         Utility.exec("pkill -9 -f libload.so");
         Utility.exec("pkill -9 -f libpdnsd.so");
         Utility.exec("pkill -9 -f libtun2socks.so");
 
         try {
-            System.jniclose(mInterface.getFd());
-            mInterface.close();
+            if (mInterface != null) {
+                System.jniclose(mInterface.getFd());
+                mInterface.close();
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -168,22 +186,16 @@ public class SocksVpnService extends VpnService {
                 .addDnsServer("8.8.8.8");
 
         if (ipv6) {
-            // Route all IPv6 traffic
             b.addAddress("fdfe:dcba:9876::1", 126)
                     .addRoute("::", 0);
         }
 
         Routes.addRoutes(this, b, route);
 
-        // Add the default DNS
-        // Note that this DNS is just a stub.
-        // Actual DNS requests will be redirected through pdnsd.
         b.addDnsServer("8.8.8.8");
         b.addRoute("8.8.8.8", 32);
 
-        // Do app routing
         if (!perApp) {
-            // Just bypass myself
             try {
                 b.addDisallowedApplication("net.typeblog.socks");
             } catch (Exception e) {
@@ -191,7 +203,6 @@ public class SocksVpnService extends VpnService {
             }
         } else {
             if (bypass) {
-                // First, bypass myself
                 try {
                     b.addDisallowedApplication("net.typeblog.socks");
                 } catch (Exception e) {
@@ -199,9 +210,7 @@ public class SocksVpnService extends VpnService {
                 }
 
                 for (String p : apps) {
-                    if (TextUtils.isEmpty(p))
-                        continue;
-
+                    if (TextUtils.isEmpty(p)) continue;
                     try {
                         b.addDisallowedApplication(p.trim());
                     } catch (Exception e) {
@@ -210,10 +219,7 @@ public class SocksVpnService extends VpnService {
                 }
             } else {
                 for (String p : apps) {
-                    if (TextUtils.isEmpty(p) || p.trim().equals("net.typeblog.socks")) {
-                        continue;
-                    }
-
+                    if (TextUtils.isEmpty(p) || p.trim().equals("net.typeblog.socks")) continue;
                     try {
                         b.addAllowedApplication(p.trim());
                     } catch (Exception e) {
@@ -232,8 +238,10 @@ public class SocksVpnService extends VpnService {
         // Start DNS daemon first
         Utility.makePdnsdConf(this, dns, dnsPort);
 
-        Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
+        // FIX: Simpan track dari native process (libpdnsd)
+        Process pdnsd = Utility.startDaemon(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
+        if (pdnsd != null) mNativeDaemons.add(pdnsd);
 
         // Start libuz.so instances
         StringBuilder tunnels = new StringBuilder();
@@ -260,7 +268,10 @@ public class SocksVpnService extends VpnService {
                     "--config", jsonConfig
             };
 
-            new Thread(() -> Utility.exec(uzCmd)).start();
+            // FIX: Simpan track dari proses libuz (Hindari raw thread)
+            Process pUz = Utility.startDaemon(uzCmd);
+            if (pUz != null) mNativeDaemons.add(pUz);
+            
             tunnels.append("127.0.0.1:").append(listenPort).append(" ");
         }
 
@@ -276,7 +287,9 @@ public class SocksVpnService extends VpnService {
         loadCmd[5] = "-tunnel";
         java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
 
-        new Thread(() -> Utility.exec(loadCmd)).start();
+        // FIX: Simpan track libload.so
+        Process pLoad = Utility.startDaemon(loadCmd);
+        if (pLoad != null) mNativeDaemons.add(pLoad);
 
         try {
             Thread.sleep(1000);
@@ -307,7 +320,11 @@ public class SocksVpnService extends VpnService {
             Log.d(TAG, command);
         }
 
-        if (Utility.exec(command) != 0) {
+        // FIX: Hapus Utility.exec yang blocking dan gantikan tracking libtun2socks
+        Process pTun = Utility.startDaemon(command);
+        if (pTun != null) {
+            mNativeDaemons.add(pTun);
+        } else {
             stopMe();
             return;
         }
@@ -329,7 +346,6 @@ public class SocksVpnService extends VpnService {
             }
         }
 
-        // Should not get here. Must be a failure.
         stopMe();
     }
 }
