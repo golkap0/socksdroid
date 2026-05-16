@@ -28,7 +28,7 @@ public class Profile {
     }
 
     public int getPort() {
-        return mPref.getInt(key("port"), 1080);
+        return mPref.getInt(key("port"), 7777);
     }
 
     public void setPort(int port) {
@@ -148,7 +148,7 @@ public class Profile {
     }
 
     public String getDownLimit() {
-        return mPref.getString(key("down_limit"), "1 Mbps");
+        return mPref.getString(key("down_limit"), "2500 Kbps");
     }
 
     public void setDownLimit(String limit) {
@@ -156,7 +156,7 @@ public class Profile {
     }
 
     public int getRecvWinConn() {
-        return mPref.getInt(key("recv_win_conn"), 262144);
+        return mPref.getInt(key("recv_win_conn"), 131072);
     }
 
     public void setRecvWinConn(int win) {
@@ -164,7 +164,7 @@ public class Profile {
     }
 
     public int getRecvWin() {
-        return mPref.getInt(key("recv_win"), 4194304);
+        return mPref.getInt(key("recv_win"), 327680);
     }
 
     public void setRecvWin(int win) {
@@ -180,7 +180,7 @@ public class Profile {
     }
 
     public String getTunnelHost() {
-        return mPref.getString(key("tunnel_host"), "ssh-2.chice.me");
+        return mPref.getString(key("tunnel_host"), "");
     }
 
     public void setTunnelHost(String host) {
@@ -188,7 +188,7 @@ public class Profile {
     }
 
     public String getTunnelUser() {
-        return mPref.getString(key("tunnel_user"), "vpnstunnel-bnml0");
+        return mPref.getString(key("tunnel_user"), "");
     }
 
     public void setTunnelUser(String user) {
