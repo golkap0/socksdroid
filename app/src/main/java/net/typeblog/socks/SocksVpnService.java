@@ -297,8 +297,7 @@ public class SocksVpnService extends VpnService {
         loadCmd[1] = "-lhost"; loadCmd[2] = "127.0.0.1";
         loadCmd[3] = "-lport"; loadCmd[4] = String.valueOf(loadPort);
         loadCmd[5] = "-tunnel";
-        System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
-
+        java.lang.System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
         Process pLoad = Utility.startDaemon(loadCmd);
         if (pLoad != null) mNativeDaemons.add(pLoad);
 
@@ -410,7 +409,7 @@ public class SocksVpnService extends VpnService {
                 byte[] ip = InetAddress.getByName(targetHost).getAddress();
                 byte[] request = new byte[6 + ip.length];
                 request[0] = 0x05; request[1] = 0x01; request[2] = 0x00; request[3] = 0x01; // IPv4
-                System.arraycopy(ip, 0, request, 4, ip.length);
+                java.lang.System.arraycopy(ip, 0, request, 4, ip.length);
                 request[4 + ip.length] = (byte) (targetPort >> 8);
                 request[5 + ip.length] = (byte) (targetPort & 0xFF);
                 out.write(request);
