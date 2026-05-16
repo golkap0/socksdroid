@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
+import java.util.Scanner;
 
 import net.typeblog.socks.R;
 import net.typeblog.socks.SocksVpnService;
@@ -18,11 +19,41 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
 
-    public static int exec(String cmd) {
+    // FIX: Method baru untuk menjalankan native process tanpa blocking dan membuang stream (Mencegah Overheat/Hang)
+    public static Process startDaemon(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            new Thread(() -> {
+                try (Scanner s = new Scanner(p.getInputStream())) { while(s.hasNextLine()) s.nextLine(); }
+            }).start();
+            new Thread(() -> {
+                try (Scanner s = new Scanner(p.getErrorStream())) { while(s.hasNextLine()) s.nextLine(); }
+            }).start();
+            return p;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
-            return p.waitFor();
+    public static Process startDaemon(String[] cmd) {
+        try {
+            Process p = Runtime.getRuntime().exec(cmd);
+            new Thread(() -> {
+                try (Scanner s = new Scanner(p.getInputStream())) { while(s.hasNextLine()) s.nextLine(); }
+            }).start();
+            new Thread(() -> {
+                try (Scanner s = new Scanner(p.getErrorStream())) { while(s.hasNextLine()) s.nextLine(); }
+            }).start();
+            return p;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public static int exec(String cmd) {
+        try {
+            Process p = startDaemon(cmd); // FIX: Gunakan startDaemon untuk handle stream
+            return p != null ? p.waitFor() : -1;
         } catch (Exception e) {
             return -1;
         }
@@ -30,9 +61,8 @@ public class Utility {
 
     public static int exec(String[] cmd) {
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
-
-            return p.waitFor();
+            Process p = startDaemon(cmd); // FIX: Gunakan startDaemon untuk handle stream
+            return p != null ? p.waitFor() : -1;
         } catch (Exception e) {
             return -1;
         }
@@ -45,29 +75,22 @@ public class Utility {
             return;
         }
 
-        InputStream i;
-        try {
-            i = new FileInputStream(file);
-        } catch (Exception e) {
-            return;
-        }
-
-        byte[] buf = new byte[512];
-        int len;
         StringBuilder str = new StringBuilder();
 
-        try {
+        // FIX: Try-with-resources untuk otomatis menutup InputStream (Mencegah I/O Leak)
+        try (InputStream i = new FileInputStream(file)) {
+            byte[] buf = new byte[512];
+            int len;
             while ((len = i.read(buf, 0, 512)) > 0) {
                 str.append(new String(buf, 0, len));
             }
-            i.close();
         } catch (Exception e) {
             return;
         }
 
         try {
             int pid = Integer.parseInt(str.toString().trim().replace("\n", ""));
-            Runtime.getRuntime().exec("kill " + pid).waitFor();
+            Runtime.getRuntime().exec("kill -9 " + pid).waitFor();
             if(!file.delete())
                 Log.w(TAG, "failed to delete pidfile");
         } catch (Exception e) {
@@ -100,11 +123,10 @@ public class Utility {
                 Log.w(TAG, "failed to delete pdnsd.conf");
         }
 
-        try {
-            OutputStream out = new FileOutputStream(f);
+        // FIX: Try-with-resources untuk Output Stream
+        try (OutputStream out = new FileOutputStream(f)) {
             out.write(conf.getBytes());
             out.flush();
-            out.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
