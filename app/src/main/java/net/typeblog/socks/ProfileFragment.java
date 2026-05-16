@@ -38,6 +38,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     private MenuItem mActionStart, mActionStop;
     private boolean mRunning = false;
+    private boolean mBound = false;
     private boolean mStarting = false, mStopping = false;
     private final IVpnServiceCallback mCallback = new IVpnServiceCallback.Stub() {
         @Override
@@ -93,13 +94,16 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (mBinder != null) {
-            try {
-                mBinder.unregisterCallback(mCallback);
-            } catch (Exception e) {
-                // Ignore
+        if (mBound) {
+            if (mBinder != null) {
+                try {
+                    mBinder.unregisterCallback(mCallback);
+                } catch (Exception e) {
+                    // Ignore
+                }
             }
             getActivity().unbindService(mConnection);
+            mBound = false;
             mBinder = null;
         }
     }
@@ -505,7 +509,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         if (mActionStop != null) mActionStop.setEnabled(false);
 
         if (mBinder == null) {
-            getActivity().bindService(new Intent(getActivity(), SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
+            mBound = getActivity().bindService(new Intent(getActivity(), SocksVpnService.class), mConnection, Context.BIND_AUTO_CREATE);
         }
     }
 

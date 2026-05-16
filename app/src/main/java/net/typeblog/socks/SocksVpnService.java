@@ -14,6 +14,7 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import net.typeblog.socks.util.Routes;
+import net.typeblog.socks.util.SocksForwarder;
 import net.typeblog.socks.util.Utility;
 
 import java.net.InetSocketAddress;
@@ -61,6 +62,7 @@ public class SocksVpnService extends VpnService {
     private final RemoteCallbackList<IVpnServiceCallback> mCallbacks = new RemoteCallbackList<>();
     private final ExecutorService mExecutor = Executors.newFixedThreadPool(16);
     private final List<Future<?>> mFutures = Collections.synchronizedList(new ArrayList<>());
+    private SocksForwarder mForwarder;
 
     private synchronized void setRunning(boolean running) {
         mRunning = running;
@@ -171,11 +173,17 @@ public class SocksVpnService extends VpnService {
         super.onDestroy();
 
         stopMe();
+        mExecutor.shutdown();
     }
 
     private void stopMe() {
         setRunning(false);
         stopForeground(true);
+
+        if (mForwarder != null) {
+            mForwarder.stop();
+            mForwarder = null;
+        }
 
         synchronized (mFutures) {
             for (Future<?> f : mFutures) {
@@ -272,8 +280,14 @@ public class SocksVpnService extends VpnService {
     private void start(int fd, String server, int port, String user, String passwd, String dns, int dnsPort, boolean ipv6, String udpgw,
                        String obfs, String up, String down, int recvWinConn, int recvWin, int coreCount,
                        String tunHost, String tunUser) {
+        int loadPort = 7777;
+
+        // Start SocksForwarder for DNS
+        mForwarder = new SocksForwarder(dns, dnsPort, "127.0.0.1", loadPort, 8092);
+        mFutures.add(mExecutor.submit(mForwarder));
+
         // Start DNS daemon first
-        Utility.makePdnsdConf(this, dns, dnsPort);
+        Utility.makePdnsdConf(this, "127.0.0.1", 8092);
 
         Utility.exec(String.format(Locale.US, "%s/libpdnsd.so -c %s/pdnsd.conf",
                 getApplicationInfo().nativeLibraryDir, getFilesDir()));
@@ -308,7 +322,6 @@ public class SocksVpnService extends VpnService {
         }
 
         // Start libload.so
-        int loadPort = 7777;
         String[] tunnelList = tunnels.toString().trim().split(" ");
         String[] loadCmd = new String[6 + tunnelList.length];
         loadCmd[0] = getApplicationInfo().nativeLibraryDir + "/libload.so";
