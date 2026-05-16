@@ -64,7 +64,9 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         @Override
         public void run() {
             updateState();
-            mSwitch.postDelayed(this, 1000);
+            if (mSwitch != null) {
+                mSwitch.postDelayed(this, 1000);
+            }
         }
     };
     private IVpnService mBinder;
@@ -118,9 +120,25 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         }
     }
 
+    // FIX: Cegah Memory Leak (Garbage Collector tidak terblokir karena background loop dimatikan)
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mSwitch != null) {
+            mSwitch.removeCallbacks(mStateRunnable); // Hentikan loop pemanggil ketika UI ditutup
+        }
+        if (mBinder != null) {
+            try {
+                getActivity().unbindService(mConnection);
+            } catch (Exception e) {
+                // Ignore if not bound
+            }
+            mBinder = null;
+        }
+    }
+
     @Override
     public boolean onPreferenceClick(Preference p) {
-        // TODO: Implement this method
         return false;
     }
 
@@ -488,8 +506,10 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
     private void checkState() {
         mRunning = false;
-        mSwitch.setEnabled(false);
-        mSwitch.setOnCheckedChangeListener(null);
+        if (mSwitch != null) {
+            mSwitch.setEnabled(false);
+            mSwitch.setOnCheckedChangeListener(null);
+        }
 
         if (mBinder == null) {
             getActivity().bindService(new Intent(getActivity(), SocksVpnService.class), mConnection, 0);
@@ -507,21 +527,23 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             }
         }
 
-        mSwitch.setChecked(mRunning);
+        if (mSwitch != null) {
+            mSwitch.setChecked(mRunning);
 
-        if ((!mStarting && !mStopping) || (mStarting && mRunning) || (mStopping && !mRunning)) {
-            mSwitch.setEnabled(true);
+            if ((!mStarting && !mStopping) || (mStarting && mRunning) || (mStopping && !mRunning)) {
+                mSwitch.setEnabled(true);
+            }
+
+            if (mStarting && mRunning) {
+                mStarting = false;
+            }
+
+            if (mStopping && !mRunning) {
+                mStopping = false;
+            }
+
+            mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
         }
-
-        if (mStarting && mRunning) {
-            mStarting = false;
-        }
-
-        if (mStopping && !mRunning) {
-            mStopping = false;
-        }
-
-        mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
     }
 
     private void startVpn() {
@@ -549,7 +571,11 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
 
         mBinder = null;
 
-        getActivity().unbindService(mConnection);
+        try {
+            getActivity().unbindService(mConnection);
+        } catch (Exception e) {
+            // Ignore
+        }
         checkState();
     }
 }
