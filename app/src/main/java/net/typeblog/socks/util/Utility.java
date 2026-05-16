@@ -10,7 +10,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.List;
-import java.util.Scanner;
 
 import net.typeblog.socks.R;
 import net.typeblog.socks.SocksVpnService;
@@ -19,28 +18,22 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
 
-    // FIX: Method baru untuk menjalankan native process tanpa blocking dan membuang stream (Mencegah Overheat/Hang)
+    // OPTIMASI FINAL: Membaca log mentah TANPA memberatkan RAM dan menutup Stream dengan aman (Try-With-Resources)
     public static Process startDaemon(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-            
-            // OPTIMASI: Membaca byte mentah dan langsung membuangnya (0% CPU, Tidak boros RAM)
             new Thread(() -> {
-                try {
-                    InputStream is = p.getInputStream();
+                try (InputStream is = p.getInputStream()) {
                     byte[] buf = new byte[4096];
-                    while (is.read(buf) != -1) {} // Looping kosong: Baca lalu lupakan
+                    while (is.read(buf) != -1) {} // Buang log
                 } catch (Exception e) {}
             }).start();
-            
             new Thread(() -> {
-                try {
-                    InputStream es = p.getErrorStream();
+                try (InputStream es = p.getErrorStream()) {
                     byte[] buf = new byte[4096];
-                    while (es.read(buf) != -1) {} // Looping kosong
+                    while (es.read(buf) != -1) {} // Buang error log
                 } catch (Exception e) {}
             }).start();
-            
             return p;
         } catch (Exception e) {
             return null;
@@ -50,23 +43,18 @@ public class Utility {
     public static Process startDaemon(String[] cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
-            
             new Thread(() -> {
-                try {
-                    InputStream is = p.getInputStream();
+                try (InputStream is = p.getInputStream()) {
                     byte[] buf = new byte[4096];
                     while (is.read(buf) != -1) {} 
                 } catch (Exception e) {}
             }).start();
-            
             new Thread(() -> {
-                try {
-                    InputStream es = p.getErrorStream();
+                try (InputStream es = p.getErrorStream()) {
                     byte[] buf = new byte[4096];
-                    while (es.read(buf) != -1) {}
+                    while (es.read(buf) != -1) {} 
                 } catch (Exception e) {}
             }).start();
-            
             return p;
         } catch (Exception e) {
             return null;
@@ -75,7 +63,7 @@ public class Utility {
 
     public static int exec(String cmd) {
         try {
-            Process p = startDaemon(cmd); // FIX: Gunakan startDaemon untuk handle stream
+            Process p = startDaemon(cmd);
             return p != null ? p.waitFor() : -1;
         } catch (Exception e) {
             return -1;
@@ -84,7 +72,7 @@ public class Utility {
 
     public static int exec(String[] cmd) {
         try {
-            Process p = startDaemon(cmd); // FIX: Gunakan startDaemon untuk handle stream
+            Process p = startDaemon(cmd);
             return p != null ? p.waitFor() : -1;
         } catch (Exception e) {
             return -1;
@@ -93,14 +81,9 @@ public class Utility {
 
     public static void killPidFile(String f) {
         File file = new File(f);
-
-        if (!file.exists()) {
-            return;
-        }
+        if (!file.exists()) return;
 
         StringBuilder str = new StringBuilder();
-
-        // FIX: Try-with-resources untuk otomatis menutup InputStream (Mencegah I/O Leak)
         try (InputStream i = new FileInputStream(file)) {
             byte[] buf = new byte[512];
             int len;
@@ -114,8 +97,7 @@ public class Utility {
         try {
             int pid = Integer.parseInt(str.toString().trim().replace("\n", ""));
             Runtime.getRuntime().exec("kill -9 " + pid).waitFor();
-            if(!file.delete())
-                Log.w(TAG, "failed to delete pidfile");
+            if(!file.delete()) Log.w(TAG, "failed to delete pidfile");
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -123,13 +105,8 @@ public class Utility {
 
     public static String join(List<String> list, String separator) {
         if (list.isEmpty()) return "";
-
         StringBuilder ret = new StringBuilder();
-
-        for (String s : list) {
-            ret.append(s).append(separator);
-        }
-
+        for (String s : list) ret.append(s).append(separator);
         return ret.substring(0, ret.length() - separator.length());
     }
 
@@ -140,13 +117,10 @@ public class Utility {
                 .replace("{PORT}", Integer.toString(port));
 
         File f = new File(context.getFilesDir() + "/pdnsd.conf");
-
         if (f.exists()) {
-            if(!f.delete())
-                Log.w(TAG, "failed to delete pdnsd.conf");
+            if(!f.delete()) Log.w(TAG, "failed to delete pdnsd.conf");
         }
 
-        // FIX: Try-with-resources untuk Output Stream
         try (OutputStream out = new FileOutputStream(f)) {
             out.write(conf.getBytes());
             out.flush();
@@ -155,11 +129,9 @@ public class Utility {
         }
 
         File cache = new File(context.getFilesDir() + "/pdnsd.cache");
-
         if (!cache.exists()) {
             try {
-                if(!cache.createNewFile())
-                    Log.w(TAG, "failed to create pdnsd.cache");
+                if(!cache.createNewFile()) Log.w(TAG, "failed to create pdnsd.cache");
             } catch (Exception e) {
                 e.printStackTrace();
             }
