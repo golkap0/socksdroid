@@ -17,9 +17,13 @@
         android:title="@string/prof_export"/>
 
     <item
-        android:id="@+id/switch_main"
-        android:title="@string/switch_main"
-        android:showAsAction="always"
-        android:actionLayout="@layout/action_switch"/>
+        android:id="@+id/action_start"
+        android:title="@string/vpn_start"
+        android:showAsAction="ifRoom"/>
+
+    <item
+        android:id="@+id/action_stop"
+        android:title="@string/vpn_stop"
+        android:showAsAction="ifRoom"/>
 
 </menu>

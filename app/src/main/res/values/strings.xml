@@ -56,4 +56,7 @@
     <string name="notify_msg">Connected to %s</string>
     <string name="channel_name">Proxy active</string>
 
+    <string name="vpn_start">START</string>
+    <string name="vpn_stop">STOP</string>
+
 </resources>
