@@ -23,12 +23,24 @@ public class Utility {
     public static Process startDaemon(String cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            
+            // OPTIMASI: Membaca byte mentah dan langsung membuangnya (0% CPU, Tidak boros RAM)
             new Thread(() -> {
-                try (Scanner s = new Scanner(p.getInputStream())) { while(s.hasNextLine()) s.nextLine(); }
+                try {
+                    InputStream is = p.getInputStream();
+                    byte[] buf = new byte[4096];
+                    while (is.read(buf) != -1) {} // Looping kosong: Baca lalu lupakan
+                } catch (Exception e) {}
             }).start();
+            
             new Thread(() -> {
-                try (Scanner s = new Scanner(p.getErrorStream())) { while(s.hasNextLine()) s.nextLine(); }
+                try {
+                    InputStream es = p.getErrorStream();
+                    byte[] buf = new byte[4096];
+                    while (es.read(buf) != -1) {} // Looping kosong
+                } catch (Exception e) {}
             }).start();
+            
             return p;
         } catch (Exception e) {
             return null;
@@ -38,12 +50,23 @@ public class Utility {
     public static Process startDaemon(String[] cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
+            
             new Thread(() -> {
-                try (Scanner s = new Scanner(p.getInputStream())) { while(s.hasNextLine()) s.nextLine(); }
+                try {
+                    InputStream is = p.getInputStream();
+                    byte[] buf = new byte[4096];
+                    while (is.read(buf) != -1) {} 
+                } catch (Exception e) {}
             }).start();
+            
             new Thread(() -> {
-                try (Scanner s = new Scanner(p.getErrorStream())) { while(s.hasNextLine()) s.nextLine(); }
+                try {
+                    InputStream es = p.getErrorStream();
+                    byte[] buf = new byte[4096];
+                    while (es.read(buf) != -1) {}
+                } catch (Exception e) {}
             }).start();
+            
             return p;
         } catch (Exception e) {
             return null;
