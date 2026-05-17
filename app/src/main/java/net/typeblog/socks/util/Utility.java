@@ -2,13 +2,17 @@ package net.typeblog.socks.util;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.util.Log;
 
+import java.io.BufferedReader;
+import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.List;
 
 import net.typeblog.socks.R;
@@ -18,47 +22,45 @@ import static net.typeblog.socks.util.Constants.*;
 public class Utility {
     private static final String TAG = Utility.class.getSimpleName();
 
-    // OPTIMASI FINAL: Membaca log mentah TANPA memberatkan RAM dan menutup Stream dengan aman (Try-With-Resources)
-    public static Process startDaemon(String cmd) {
+    // =====================================================================
+    // FIX: Eliminasi 2 thread pembuang log per proses
+    // API 26+ : Output dibuang langsung via Redirect.DISCARD (0 thread)
+    // API <26 : Stderr digabung ke stdout, 1 thread drain saja (bukan 2)
+    // =====================================================================
+    private static Process startProcess(ProcessBuilder pb) {
         try {
-            Process p = Runtime.getRuntime().exec(cmd);
-            new Thread(() -> {
-                try (InputStream is = p.getInputStream()) {
-                    byte[] buf = new byte[4096];
-                    while (is.read(buf) != -1) {} // Buang log
-                } catch (Exception e) {}
-            }).start();
-            new Thread(() -> {
-                try (InputStream es = p.getErrorStream()) {
-                    byte[] buf = new byte[4096];
-                    while (es.read(buf) != -1) {} // Buang error log
-                } catch (Exception e) {}
-            }).start();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // DISCARD langsung ke /dev/null — TIDAK perlu thread sama sekali
+                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+                pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            } else {
+                // Gabung stderr ke stdout, cukup 1 thread drain
+                pb.redirectErrorStream(true);
+            }
+            Process p = pb.start();
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                // Single drain thread (bukan 2) — mencegah proses blocking
+                new Thread(() -> {
+                    try (InputStream is = p.getInputStream()) {
+                        byte[] buf = new byte[8192];
+                        while (is.read(buf) != -1) {}
+                    } catch (Exception ignored) {}
+                }, "daemon-drain").start();
+            }
             return p;
         } catch (Exception e) {
             return null;
         }
     }
 
+    public static Process startDaemon(String cmd) {
+        // FIX: ProcessBuilder menggantikan Runtime.exec() agar bisa pakai DISCARD
+        return startProcess(new ProcessBuilder(cmd.trim().split("\\s+")));
+    }
+
     public static Process startDaemon(String[] cmd) {
-        try {
-            Process p = Runtime.getRuntime().exec(cmd);
-            new Thread(() -> {
-                try (InputStream is = p.getInputStream()) {
-                    byte[] buf = new byte[4096];
-                    while (is.read(buf) != -1) {} 
-                } catch (Exception e) {}
-            }).start();
-            new Thread(() -> {
-                try (InputStream es = p.getErrorStream()) {
-                    byte[] buf = new byte[4096];
-                    while (es.read(buf) != -1) {} 
-                } catch (Exception e) {}
-            }).start();
-            return p;
-        } catch (Exception e) {
-            return null;
-        }
+        return startProcess(new ProcessBuilder(cmd));
     }
 
     public static int exec(String cmd) {
@@ -79,25 +81,27 @@ public class Utility {
         }
     }
 
+    // FIX: BufferedReader menggantikan byte[512] manual + ProcessBuilder untuk kill
     public static void killPidFile(String f) {
         File file = new File(f);
         if (!file.exists()) return;
 
         StringBuilder str = new StringBuilder();
-        try (InputStream i = new FileInputStream(file)) {
-            byte[] buf = new byte[512];
-            int len;
-            while ((len = i.read(buf, 0, 512)) > 0) {
-                str.append(new String(buf, 0, len));
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(file)), 256)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                str.append(line.trim());
             }
         } catch (Exception e) {
             return;
         }
 
         try {
-            int pid = Integer.parseInt(str.toString().trim().replace("\n", ""));
-            Runtime.getRuntime().exec("kill -9 " + pid).waitFor();
-            if(!file.delete()) Log.w(TAG, "failed to delete pidfile");
+            int pid = Integer.parseInt(str.toString().trim());
+            // FIX: ProcessBuilder langsung tanpa shell — lebih efisien
+            new ProcessBuilder("kill", "-9", String.valueOf(pid)).start().waitFor();
+            if (!file.delete()) Log.w(TAG, "failed to delete pidfile");
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -110,6 +114,7 @@ public class Utility {
         return ret.substring(0, ret.length() - separator.length());
     }
 
+    // FIX: BufferedOutputStream untuk mengurangi write syscall
     public static void makePdnsdConf(Context context, String dns, int port) {
         String conf = context.getString(R.string.pdnsd_conf)
                 .replace("{DIR}", context.getFilesDir().toString())
@@ -118,10 +123,10 @@ public class Utility {
 
         File f = new File(context.getFilesDir() + "/pdnsd.conf");
         if (f.exists()) {
-            if(!f.delete()) Log.w(TAG, "failed to delete pdnsd.conf");
+            if (!f.delete()) Log.w(TAG, "failed to delete pdnsd.conf");
         }
 
-        try (OutputStream out = new FileOutputStream(f)) {
+        try (OutputStream out = new BufferedOutputStream(new FileOutputStream(f), 512)) {
             out.write(conf.getBytes());
             out.flush();
         } catch (Exception e) {
@@ -131,7 +136,7 @@ public class Utility {
         File cache = new File(context.getFilesDir() + "/pdnsd.cache");
         if (!cache.exists()) {
             try {
-                if(!cache.createNewFile()) Log.w(TAG, "failed to create pdnsd.cache");
+                if (!cache.createNewFile()) Log.w(TAG, "failed to create pdnsd.cache");
             } catch (Exception e) {
                 e.printStackTrace();
             }
