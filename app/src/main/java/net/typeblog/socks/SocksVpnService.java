@@ -40,7 +40,6 @@ import static net.typeblog.socks.BuildConfig.DEBUG;
 
 public class SocksVpnService extends VpnService {
 
-    // FIX: Broadcast untuk notifikasi perubahan state ke UI (menggantikan polling)
     public static final String ACTION_VPN_STATE_CHANGED = "net.typeblog.socks.VPN_STATE_CHANGED";
     public static final String EXTRA_VPN_RUNNING = "vpn_running";
 
@@ -63,7 +62,6 @@ public class SocksVpnService extends VpnService {
     private volatile boolean mStarting = false;
     private final IBinder mBinder = new VpnBinder();
 
-    // FIX: Wake lock untuk mencegah CPU deep sleep saat VPN aktif
     private PowerManager.WakeLock mWakeLock;
 
     private final List<Process> mNativeDaemons = Collections.synchronizedList(new ArrayList<>());
@@ -160,13 +158,12 @@ public class SocksVpnService extends VpnService {
         stopMe();
     }
 
-    // FIX: Broadcast perubahan state ke UI
     private void notifyStateChanged(boolean running) {
         try {
-            Intent intent = new Intent(ACTION_VPN_STATE_CHANGED);
-            intent.setPackage(getPackageName());
-            intent.putExtra(EXTRA_VPN_RUNNING, running);
-            sendBroadcast(intent);
+            Intent i = new Intent(ACTION_VPN_STATE_CHANGED);
+            i.setPackage(getPackageName());
+            i.putExtra(EXTRA_VPN_RUNNING, running);
+            sendBroadcast(i);
         } catch (Exception ignored) {}
     }
 
@@ -205,11 +202,10 @@ public class SocksVpnService extends VpnService {
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // FIX: HAPUS 4x pkill yang redundan — Process.destroy() sudah cukup
-
         if (mInterface != null) {
             try {
-                java.lang.System.jniclose(mInterface.getFd());
+                // Resolve ke custom System class di package net.typeblog.socks
+                System.jniclose(mInterface.getFd());
                 mInterface.close();
             } catch (Exception e) {}
             mInterface = null;
@@ -294,7 +290,6 @@ public class SocksVpnService extends VpnService {
         loadCmd[1] = "-lhost"; loadCmd[2] = "127.0.0.1";
         loadCmd[3] = "-lport"; loadCmd[4] = String.valueOf(loadPort);
         loadCmd[5] = "-tunnel";
-        // FIX: Manual copy loop — java.lang.System.arraycopy tersingkirkan oleh custom System class
         for (int i = 0; i < tunnelList.length; i++) {
             loadCmd[6 + i] = tunnelList[i];
         }
@@ -302,7 +297,6 @@ public class SocksVpnService extends VpnService {
         Process pLoad = Utility.startDaemon(loadCmd);
         if (pLoad != null) mNativeDaemons.add(pLoad);
 
-        // FIX: Kurangi dari 1000ms → 500ms
         try { Thread.sleep(500); } catch (InterruptedException ignored) {}
 
         String command = String.format(Locale.US,
@@ -323,10 +317,10 @@ public class SocksVpnService extends VpnService {
             return;
         }
 
-        // FIX: Exponential backoff — total max ~5s (vs 15s sebelumnya)
         long retryDelay = 200;
         for (int attempt = 0; attempt < 5; attempt++) {
-            if (java.lang.System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
+            // Resolve ke custom System class di package net.typeblog.socks
+            if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
                 mRunning = true;
                 notifyStateChanged(true);
                 return;
@@ -337,12 +331,6 @@ public class SocksVpnService extends VpnService {
         stopMe();
     }
 
-    // =====================================================================
-    // FIX UTAMA: SocksForwarder — Penyebab utama overheating
-    // - Buffered streams + smart flush
-    // - Thread pool capped
-    // - SO_REUSEADDR
-    // =====================================================================
     private static class SocksForwarder extends Thread {
         private static final String TAG = "SocksForwarder";
         private final int listenPort;
@@ -352,7 +340,6 @@ public class SocksVpnService extends VpnService {
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
 
-        // FIX: Cap thread pool — max 6 thread
         private static final int MAX_FORWARDER_THREADS = 6;
         private final ExecutorService executor = new ThreadPoolExecutor(
                 2,
@@ -415,7 +402,6 @@ public class SocksVpnService extends VpnService {
                 byte[] ip = InetAddress.getByName(targetHost).getAddress();
                 byte[] request = new byte[6 + ip.length];
                 request[0] = 0x05; request[1] = 0x01; request[2] = 0x00; request[3] = 0x01;
-                // FIX: Manual copy — java.lang.System.arraycopy tersingkirkan
                 for (int i = 0; i < ip.length; i++) {
                     request[4 + i] = ip[i];
                 }
@@ -450,16 +436,6 @@ public class SocksVpnService extends VpnService {
             }
         }
 
-        // =============================================================
-        // FIX KRITIS: pipe() — Penyebab #1 overheating
-        //
-        // SEBELUM: OutputStream raw + flush() per tulisan
-        //   → Puluhan ribu syscall/detik pada traffic tinggi
-        //
-        // SESUDAH: BufferedInputStream/OutputStream + smart flush
-        //   → Flush hanya ketika tidak ada data lagi yang siap dibaca
-        //   → Pengurangan syscall 70-90%
-        // =============================================================
         private void pipe(Socket inputSocket, Socket outputSocket) {
             try (InputStream is = new BufferedInputStream(inputSocket.getInputStream(), 32768);
                  OutputStream os = new BufferedOutputStream(outputSocket.getOutputStream(), 32768)) {
@@ -467,7 +443,6 @@ public class SocksVpnService extends VpnService {
                 int n;
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
-                    // Smart flush: hanya flush ketika tidak ada data lagi yang siap
                     if (is.available() == 0) {
                         os.flush();
                     }
