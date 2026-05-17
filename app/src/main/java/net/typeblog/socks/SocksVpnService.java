@@ -31,8 +31,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import static net.typeblog.socks.util.Constants.*;
 import static net.typeblog.socks.BuildConfig.DEBUG;
@@ -110,7 +111,7 @@ public class SocksVpnService extends VpnService {
         }
 
         int intentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             intentFlags |= PendingIntent.FLAG_IMMUTABLE;
         }
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
@@ -126,7 +127,6 @@ public class SocksVpnService extends VpnService {
         configure(name, route, perApp, appBypass, appList, ipv6, dns);
 
         if (mInterface != null) {
-            // FIX: Acquire wake lock sebelum memulai VPN
             acquireWakeLock();
             mStarting = true;
             final int fd = mInterface.getFd();
@@ -160,7 +160,7 @@ public class SocksVpnService extends VpnService {
         stopMe();
     }
 
-    // FIX: Broadcast perubahan state ke UI (menggantikan polling 1Hz via IPC)
+    // FIX: Broadcast perubahan state ke UI
     private void notifyStateChanged(boolean running) {
         try {
             Intent intent = new Intent(ACTION_VPN_STATE_CHANGED);
@@ -170,13 +170,11 @@ public class SocksVpnService extends VpnService {
         } catch (Exception ignored) {}
     }
 
-    // FIX: Wake lock management
     private void acquireWakeLock() {
         if (mWakeLock == null) {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null) {
                 mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "socks:vpn_active");
-                // Safety timeout 12 jam untuk mencegah lock permanen jika crash
                 mWakeLock.acquire(12 * 60 * 60 * 1000L);
             }
         }
@@ -197,7 +195,6 @@ public class SocksVpnService extends VpnService {
             mForwarder = null;
         }
 
-        // Process.destroy() sudah mengirim SIGKILL — cukup untuk menghentikan semua daemon
         synchronized (mNativeDaemons) {
             for (Process p : mNativeDaemons) {
                 if (p != null) p.destroy();
@@ -208,24 +205,16 @@ public class SocksVpnService extends VpnService {
         Utility.killPidFile(getFilesDir() + "/tun2socks.pid");
         Utility.killPidFile(getFilesDir() + "/pdnsd.pid");
 
-        // FIX: HAPUS 4x pkill yang redundan
-        // Process.destroy() di atas sudah menghancurkan semua proses.
-        // pkill menambah 4 proses + 8 thread ekstra yang tidak perlu.
-        //
-        // Utility.exec("pkill -9 -f libuz.so");      // REMOVED
-        // Utility.exec("pkill -9 -f libload.so");     // REMOVED
-        // Utility.exec("pkill -9 -f libpdnsd.so");    // REMOVED
-        // Utility.exec("pkill -9 -f libtun2socks.so");// REMOVED
+        // FIX: HAPUS 4x pkill yang redundan — Process.destroy() sudah cukup
 
         if (mInterface != null) {
             try {
-                System.jniclose(mInterface.getFd());
+                java.lang.System.jniclose(mInterface.getFd());
                 mInterface.close();
             } catch (Exception e) {}
             mInterface = null;
         }
 
-        // FIX: Broadcast state sebelum berhenti + release wake lock
         mRunning = false;
         notifyStateChanged(false);
         releaseWakeLock();
@@ -305,15 +294,17 @@ public class SocksVpnService extends VpnService {
         loadCmd[1] = "-lhost"; loadCmd[2] = "127.0.0.1";
         loadCmd[3] = "-lport"; loadCmd[4] = String.valueOf(loadPort);
         loadCmd[5] = "-tunnel";
-        System.arraycopy(tunnelList, 0, loadCmd, 6, tunnelList.length);
+        // FIX: Manual copy loop — java.lang.System.arraycopy tersingkirkan oleh custom System class
+        for (int i = 0; i < tunnelList.length; i++) {
+            loadCmd[6 + i] = tunnelList[i];
+        }
 
         Process pLoad = Utility.startDaemon(loadCmd);
         if (pLoad != null) mNativeDaemons.add(pLoad);
 
-        // FIX: Kurangi dari 1000ms → 500ms (cukup untuk inisialisasi load balancer lokal)
+        // FIX: Kurangi dari 1000ms → 500ms
         try { Thread.sleep(500); } catch (InterruptedException ignored) {}
 
-        // AUDIT FIX: Loglevel 1 untuk tun2socks (Anti Panas)
         String command = String.format(Locale.US,
                 "%s/libtun2socks.so --netif-ipaddr 26.26.26.2 --netif-netmask 255.255.255.0"
                         + " --socks-server-addr 127.0.0.1:%d --tunfd %d --tunmtu 1500"
@@ -332,12 +323,12 @@ public class SocksVpnService extends VpnService {
             return;
         }
 
-        // FIX: Exponential backoff — total max 5s (vs 15s sebelumnya)
+        // FIX: Exponential backoff — total max ~5s (vs 15s sebelumnya)
         long retryDelay = 200;
         for (int attempt = 0; attempt < 5; attempt++) {
-            if (System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
+            if (java.lang.System.sendfd(fd, getApplicationInfo().dataDir + "/sock_path") != -1) {
                 mRunning = true;
-                notifyStateChanged(true); // FIX: Broadcast state ke UI
+                notifyStateChanged(true);
                 return;
             }
             try { Thread.sleep(retryDelay); } catch (InterruptedException ignored) {}
@@ -348,9 +339,9 @@ public class SocksVpnService extends VpnService {
 
     // =====================================================================
     // FIX UTAMA: SocksForwarder — Penyebab utama overheating
-    // - Buffered streams + smart flush (menggantikan flush per-tulisan)
-    // - Thread pool capped (menggantikan unlimited)
-    // - SO_REUSEADDR pada server socket
+    // - Buffered streams + smart flush
+    // - Thread pool capped
+    // - SO_REUSEADDR
     // =====================================================================
     private static class SocksForwarder extends Thread {
         private static final String TAG = "SocksForwarder";
@@ -361,10 +352,13 @@ public class SocksVpnService extends VpnService {
         private ServerSocket serverSocket;
         private static final int SOCKET_TIMEOUT_MS = 30_000;
 
-        // FIX: Cap thread pool — max 6 thread (bukan availableProcessors unlimited)
+        // FIX: Cap thread pool — max 6 thread
         private static final int MAX_FORWARDER_THREADS = 6;
-        private final ExecutorService executor = Executors.newFixedThreadPool(
-                Math.min(MAX_FORWARDER_THREADS, Math.max(2, Runtime.getRuntime().availableProcessors()))
+        private final ExecutorService executor = new ThreadPoolExecutor(
+                2,
+                Math.min(MAX_FORWARDER_THREADS, Math.max(2, Runtime.getRuntime().availableProcessors())),
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(128)
         );
 
         public SocksForwarder(int listenPort, String targetHost, int targetPort, int proxyPort) {
@@ -377,7 +371,6 @@ public class SocksVpnService extends VpnService {
         @Override
         public void run() {
             try {
-                // FIX: SO_REUSEADDR — hindari "Address already in use" saat restart cepat
                 serverSocket = new ServerSocket();
                 serverSocket.setReuseAddress(true);
                 serverSocket.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), listenPort), 50);
@@ -398,7 +391,6 @@ public class SocksVpnService extends VpnService {
 
             executor.shutdownNow();
             try {
-                // FIX: Hapus redundant double shutdownNow, cukup sekali
                 if (!executor.awaitTermination(3, TimeUnit.SECONDS)) {
                     Log.w(TAG, "Executor did not terminate cleanly in 3s");
                 }
@@ -423,7 +415,10 @@ public class SocksVpnService extends VpnService {
                 byte[] ip = InetAddress.getByName(targetHost).getAddress();
                 byte[] request = new byte[6 + ip.length];
                 request[0] = 0x05; request[1] = 0x01; request[2] = 0x00; request[3] = 0x01;
-                System.arraycopy(ip, 0, request, 4, ip.length);
+                // FIX: Manual copy — java.lang.System.arraycopy tersingkirkan
+                for (int i = 0; i < ip.length; i++) {
+                    request[4 + i] = ip[i];
+                }
                 request[4 + ip.length] = (byte) (targetPort >> 8);
                 request[5 + ip.length] = (byte) (targetPort & 0xFF);
                 out.write(request);
@@ -459,11 +454,9 @@ public class SocksVpnService extends VpnService {
         // FIX KRITIS: pipe() — Penyebab #1 overheating
         //
         // SEBELUM: OutputStream raw + flush() per tulisan
-        //   → Setiap write = 1 syscall, setiap flush = 1 syscall
         //   → Puluhan ribu syscall/detik pada traffic tinggi
         //
-        // SESUDAH: BufferedInputStream + BufferedOutputStream + smart flush
-        //   → Multiple write di-batch dalam buffer 32KB
+        // SESUDAH: BufferedInputStream/OutputStream + smart flush
         //   → Flush hanya ketika tidak ada data lagi yang siap dibaca
         //   → Pengurangan syscall 70-90%
         // =============================================================
@@ -475,12 +468,11 @@ public class SocksVpnService extends VpnService {
                 while ((n = is.read(buffer)) != -1) {
                     os.write(buffer, 0, n);
                     // Smart flush: hanya flush ketika tidak ada data lagi yang siap
-                    // Jika available() > 0, biarkan BufferedOutputStream batch data berikutnya
                     if (is.available() == 0) {
                         os.flush();
                     }
                 }
-                os.flush(); // Final flush
+                os.flush();
             } catch (IOException ignored) {
             } finally {
                 try { inputSocket.close(); } catch (IOException ignored) {}
