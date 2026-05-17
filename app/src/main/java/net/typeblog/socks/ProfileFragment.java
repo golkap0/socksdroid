@@ -2,10 +2,14 @@ package net.typeblog.socks;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.preference.CheckBoxPreference;
@@ -39,6 +43,20 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
     private Switch mSwitch;
     private boolean mRunning = false;
     private boolean mStarting = false, mStopping = false;
+
+    // FIX: BroadcastReceiver untuk menerima notifikasi state dari Service
+    // Menggantikan polling 1Hz via Binder IPC yang mencegah CPU idle
+    private final BroadcastReceiver mVpnStateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (SocksVpnService.ACTION_VPN_STATE_CHANGED.equals(intent.getAction())) {
+                boolean running = intent.getBooleanExtra(SocksVpnService.EXTRA_VPN_RUNNING, false);
+                mRunning = running;
+                updateSwitchState();
+            }
+        }
+    };
+
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName p1, IBinder binder) {
@@ -60,12 +78,14 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
             mBinder = null;
         }
     };
+
+    // FIX: Polling dikurangi dari 1 detik → 5 detik (fallback saja, primary via broadcast)
     private final Runnable mStateRunnable = new Runnable() {
         @Override
         public void run() {
             updateState();
             if (mSwitch != null) {
-                mSwitch.postDelayed(this, 1000);
+                mSwitch.postDelayed(this, 5000); // Was 1000ms, now 5000ms fallback
             }
         }
     };
@@ -96,8 +116,31 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         MenuItem s = menu.findItem(R.id.switch_main);
         mSwitch = s.getActionView().findViewById(R.id.switch_action_button);
         mSwitch.setOnCheckedChangeListener(this);
-        mSwitch.postDelayed(mStateRunnable, 1000);
+        mSwitch.postDelayed(mStateRunnable, 5000); // FIX: 5000ms bukan 1000ms
         checkState();
+    }
+
+    // FIX: Register broadcast receiver saat fragment visible
+    @Override
+    public void onResume() {
+        super.onResume();
+        try {
+            IntentFilter filter = new IntentFilter(SocksVpnService.ACTION_VPN_STATE_CHANGED);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                getActivity().registerReceiver(mVpnStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                getActivity().registerReceiver(mVpnStateReceiver, filter);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // FIX: Unregister broadcast receiver saat fragment tidak visible
+    @Override
+    public void onPause() {
+        super.onPause();
+        try {
+            getActivity().unregisterReceiver(mVpnStateReceiver);
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -120,13 +163,17 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         }
     }
 
-    // FIX: Cegah Memory Leak (Garbage Collector tidak terblokir karena background loop dimatikan)
+    // FIX: Cegah Memory Leak — hentikan polling loop dan unregister receiver
     @Override
     public void onDestroy() {
         super.onDestroy();
         if (mSwitch != null) {
-            mSwitch.removeCallbacks(mStateRunnable); // Hentikan loop pemanggil ketika UI ditutup
+            mSwitch.removeCallbacks(mStateRunnable);
         }
+        // Safety: unregister jika masih terdaftar
+        try {
+            getActivity().unregisterReceiver(mVpnStateReceiver);
+        } catch (Exception ignored) {}
         if (mBinder != null) {
             try {
                 getActivity().unbindService(mConnection);
@@ -404,6 +451,21 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         }
     }
 
+    // FIX: Update switch state dari broadcast — tanpa binder IPC call
+    private void updateSwitchState() {
+        if (mSwitch == null) return;
+
+        mSwitch.setChecked(mRunning);
+
+        if (mStarting && mRunning) mStarting = false;
+        if (mStopping && !mRunning) mStopping = false;
+
+        if (!mStarting && !mStopping) {
+            mSwitch.setEnabled(true);
+            mSwitch.setOnCheckedChangeListener(this);
+        }
+    }
+
     private void addProfile() {
         final EditText e = new EditText(getActivity());
         e.setSingleLine(true);
@@ -458,8 +520,8 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                                 if (p != null) {
                                     p.setTunnelHost(server);
                                     p.setTunnelUser(auth);
-                                    p.setServer("127.0.0.1"); // Load balancer address
-                                    p.setPort(7777); // Load balancer port
+                                    p.setServer("127.0.0.1");
+                                    p.setPort(7777);
                                     mProfile = p;
                                 }
                             }
@@ -475,7 +537,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
         String export = String.format("zivpn://%s@%s", mProfile.getTunnelHost(), mProfile.getTunnelUser());
         final EditText e = new EditText(getActivity());
         e.setText(export);
-        e.setKeyListener(null); // Make it read-only but selectable
+        e.setKeyListener(null);
 
         new AlertDialog.Builder(getActivity())
                 .setTitle(R.string.prof_export)
@@ -526,24 +588,7 @@ public class ProfileFragment extends PreferenceFragment implements Preference.On
                 mRunning = false;
             }
         }
-
-        if (mSwitch != null) {
-            mSwitch.setChecked(mRunning);
-
-            if ((!mStarting && !mStopping) || (mStarting && mRunning) || (mStopping && !mRunning)) {
-                mSwitch.setEnabled(true);
-            }
-
-            if (mStarting && mRunning) {
-                mStarting = false;
-            }
-
-            if (mStopping && !mRunning) {
-                mStopping = false;
-            }
-
-            mSwitch.setOnCheckedChangeListener(ProfileFragment.this);
-        }
+        updateSwitchState();
     }
 
     private void startVpn() {
