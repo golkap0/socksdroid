@@ -2,11 +2,10 @@ package net.typeblog.socks.util;
 
 import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
 import android.util.Log;
 
-import java.io.BufferedReader;
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -24,38 +23,40 @@ public class Utility {
 
     // =====================================================================
     // FIX: Eliminasi 2 thread pembuang log per proses
-    // API 26+ : Output dibuang langsung via Redirect.DISCARD (0 thread)
-    // API <26 : Stderr digabung ke stdout, 1 thread drain saja (bukan 2)
+    // Redirect stdout/stderr ke /dev/null (0 thread drain)
+    // Untuk proses yang tidak mendukung redirect file, fallback 1 thread drain
     // =====================================================================
     private static Process startProcess(ProcessBuilder pb) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                // DISCARD langsung ke /dev/null — TIDAK perlu thread sama sekali
-                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-                pb.redirectError(ProcessBuilder.Redirect.DISCARD);
-            } else {
-                // Gabung stderr ke stdout, cukup 1 thread drain
-                pb.redirectErrorStream(true);
-            }
-            Process p = pb.start();
+            // Redirect stdout dan stderr langsung ke /dev/null
+            // ProcessBuilder.redirectOutput(File) tersedia di semua API level Android
+            File devNull = new File("/dev/null");
+            pb.redirectOutput(devNull);
+            pb.redirectError(devNull);
 
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                // Single drain thread (bukan 2) — mencegah proses blocking
+            Process p = pb.start();
+            return p;
+        } catch (Exception e) {
+            // Fallback: jika redirect file gagal, gunakan 1 thread drain dengan
+            // redirectErrorStream(true) — tetap lebih baik dari 2 thread terpisah
+            try {
+                ProcessBuilder fallback = new ProcessBuilder(pb.command());
+                fallback.redirectErrorStream(true);
+                Process p = fallback.start();
                 new Thread(() -> {
                     try (InputStream is = p.getInputStream()) {
                         byte[] buf = new byte[8192];
                         while (is.read(buf) != -1) {}
                     } catch (Exception ignored) {}
                 }, "daemon-drain").start();
+                return p;
+            } catch (Exception e2) {
+                return null;
             }
-            return p;
-        } catch (Exception e) {
-            return null;
         }
     }
 
     public static Process startDaemon(String cmd) {
-        // FIX: ProcessBuilder menggantikan Runtime.exec() agar bisa pakai DISCARD
         return startProcess(new ProcessBuilder(cmd.trim().split("\\s+")));
     }
 
@@ -81,7 +82,7 @@ public class Utility {
         }
     }
 
-    // FIX: BufferedReader menggantikan byte[512] manual + ProcessBuilder untuk kill
+    // FIX: BufferedReader menggantikan byte[512] manual
     public static void killPidFile(String f) {
         File file = new File(f);
         if (!file.exists()) return;
@@ -99,7 +100,6 @@ public class Utility {
 
         try {
             int pid = Integer.parseInt(str.toString().trim());
-            // FIX: ProcessBuilder langsung tanpa shell — lebih efisien
             new ProcessBuilder("kill", "-9", String.valueOf(pid)).start().waitFor();
             if (!file.delete()) Log.w(TAG, "failed to delete pidfile");
         } catch (Exception e) {
